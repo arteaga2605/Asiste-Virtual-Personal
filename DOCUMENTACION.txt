@@ -1,0 +1,155 @@
+================================================================================
+                ASISTENTE VIRTUAL PERSONAL CON IA OFFLINE
+================================================================================
+
+1. DESCRIPCIÓN GENERAL
+   El proyecto consiste en un asistente virtual de escritorio que funciona
+   completamente offline (excepto la conexión a la API pública de Binance para
+   datos de mercado en tiempo real). Utiliza Ollama como motor de lenguaje y
+   ofrece tres áreas de especialización: trading/análisis de mercado, gestión
+   empresarial y programación en Python. La interfaz principal es un avatar
+   animado que se desplaza por la pantalla, muestra una burbuja de chat y un
+   campo de entrada de texto. Incluye menú contextual, bandeja del sistema y
+   notificaciones visuales.
+
+2. ESTRUCTURA DEL PROYECTO
+   asistente_virtual/
+   ├── config.py             # Configuración global (rutas, puertos, modelos)
+   ├── main.py               # Servidor de IA (escucha peticiones del avatar)
+   ├── agent.py              # Agente conversacional con tool calling
+   ├── avatar.py             # Interfaz gráfica (avatar animado + chat)
+   ├── requirements.txt      # Dependencias Python
+   ├── tools/
+   │   ├── trading.py        # Herramientas de trading (datos históricos,
+   │   │                       indicadores, stream Binance en vivo)
+   │   ├── business.py       # Gestión empresarial (notas, tareas, contactos)
+   │   └── code_executor.py  # Ejecución segura de código Python
+   ├── data/                 # Archivos CSV de datos históricos (a aportar)
+   └── assets/
+       └── avatar.png        # Imagen opcional para personalizar el avatar
+
+3. REQUISITOS
+   - Python 3.10 o superior.
+   - Ollama instalado y corriendo (https://ollama.com).
+   - Modelos descargados (llama3.1, codellama, etc.).
+   - Paquetes Python listados en requirements.txt.
+
+4. INSTALACIÓN Y PUESTA EN MARCHA
+   1. Clona o copia los archivos a una carpeta.
+   2. Crea un entorno virtual:
+        python -m venv venv
+   3. Actívalo:
+        Windows: venv\Scripts\activate
+        Linux/Mac: source venv/bin/activate
+   4. Instala dependencias:
+        pip install -r requirements.txt
+   5. Asegúrate de que Ollama está corriendo y has descargado los modelos:
+        ollama pull llama3.1:latest
+        ollama pull codellama:latest
+   6. (Opcional) Coloca archivos CSV históricos en la carpeta data/.
+        Formato esperado: columnas Date,Open,High,Low,Close,Volume.
+   7. (Opcional) Coloca una imagen PNG con transparencia en assets/avatar.png.
+   8. Ejecuta el servidor:
+        python main.py
+   9. El avatar aparecerá en el escritorio; escribe preguntas en su campo de
+      texto y pulsa Enter.
+
+5. ARQUITECTURA Y FLUJO DE DATOS
+   - El usuario escribe en el avatar (PyQt5). El avatar envía la pregunta a
+     través de un socket TCP al servidor (main.py) usando un protocolo de
+     longitud prefijada (4 bytes big-endian + mensaje).
+   - El servidor recibe la pregunta y llama al agente (agent.py), que
+     construye un prompt con instrucciones de sistema y el historial de
+     conversación (vacío actualmente).
+   - El agente consulta a Ollama (modelo Llama 3.1). Si el modelo solicita
+     herramientas (tool calling), el agente ejecuta las funciones
+     correspondientes (p.ej. obtener precio en vivo, calcular RSI, añadir
+     tarea) y reenvía los resultados al modelo para que genere la respuesta
+     final.
+   - La respuesta se envía de vuelta al avatar, que la muestra en una burbuja
+     de texto con scroll.
+   - El avatar posee animaciones independientes: movimiento aleatorio por la
+     pantalla (pausable al escribir), parpadeo, bombilla sobre la cabeza
+     cuando "piensa", y un icono en la bandeja del sistema para ocultarlo.
+   - El stream de Binance se mantiene en segundo plano (hilo WebSocket) y
+     actualiza un diccionario con los últimos precios. La opción "Noticias del
+     día" envía un marcador especial (__NEWS__) que dispara la recogida de
+     precios en vivo y la generación de un prompt con datos reales.
+
+6. COMPONENTES PRINCIPALES
+   - config.py:
+     Contiene rutas, puerto de comunicación, modelos de Ollama y variables de
+     entorno. Aquí puedes cambiar el modelo, desactivar el avatar, etc.
+   - agent.py:
+     Define las herramientas disponibles (según el estándar de OpenAI
+     functions) y el system prompt. La función process_user_message() maneja el
+     ciclo de tool calling y devuelve la respuesta final.
+   - tools/trading.py:
+     Funciones para cargar CSV históricos, calcular indicadores (RSI, SMA, EMA,
+     MACD), mantener precios en vivo vía WebSocket de Binance (reconexión
+     automática) y acceder a ellos.
+   - tools/business.py:
+     Gestión de base de datos SQLite con tablas para notas, tareas y contactos.
+     Operaciones CRUD básicas.
+   - tools/code_executor.py:
+     Ejecuta código Python arbitrario en un subproceso aislado con timeout.
+     La seguridad es básica; para entornos productivos se recomienda Docker.
+   - main.py (servidor):
+     Inicia el stream de Binance, levanta un servidor TCP que recibe preguntas
+     del avatar y devuelve respuestas. Si detecta el prefijo __NEWS__, recolecta
+     precios en vivo y arma un prompt especial de análisis.
+   - avatar.py (cliente gráfico):
+     Ventana transparente sin bordes, siempre visible. Contiene:
+       - Área de dibujo del avatar (imagen personalizada o dibujo vectorial).
+       - Burbuja de respuesta (QTextEdit con scroll).
+       - Campo de entrada de texto.
+       - Bombilla de "pensando".
+       - Movimiento autónomo aleatorio por la pantalla (se pausa al enfocar el
+         campo de texto).
+       - Menú contextual con opciones: (No) caminar, Noticias del día, Ocultar,
+         Expandir/esconder burbuja.
+       - Icono en la bandeja del sistema para ocultar/mostrar.
+
+7. FUNCIONAMIENTO DETALLADO DE LA OPCIÓN "NOTICIAS DEL DÍA"
+   - Al hacer clic derecho → "📰 Noticias del día", el avatar envía al servidor
+     el texto "__NEWS__".
+   - El servidor recolecta los últimos precios de 10 criptomonedas (BTC, ETH,
+     BNB, SOL, LINK, ATOM, MATIC, ADA, DOT, AVAX) mediante get_live_price().
+   - Construye un prompt que incluye esos precios y pide al LLM que sugiera 3
+     joyas ocultas para 1 día, basándose en datos reales.
+   - La respuesta se devuelve al avatar y se muestra en la burbuja.
+
+8. PERSONALIZACIÓN Y MEJORAS POSIBLES
+   - Cambiar el modelo: en config.py, modifica OLLAMA_MODEL (p.ej. "phi3:mini").
+   - Añadir herramientas: en agent.py añade una nueva entrada en la lista TOOLS
+     y la función correspondiente en el FUNCTION_MAP.
+   - Conectar más pares de Binance: edita la lista de símbolos en main.py y en
+     start_binance_stream().
+   - Implementar memoria a largo plazo: guarda el historial de conversación en
+     una base de datos y pásalo cada vez a process_user_message.
+   - Interfaz por voz: puedes añadir reconocimiento de voz con SpeechRecognition.
+
+9. LIMITACIONES CONOCIDAS
+   - Sin memoria persistente; cada sesión es independiente.
+   - El tiempo de respuesta depende del hardware y del modelo; con Llama 3.1
+     puede ser de varios segundos o minutos.
+   - La ejecución de código no está completamente aislada; úsala con precaución.
+   - El análisis de mercado se basa en datos históricos estáticos (CSV) o en
+     precios en vivo de Binance, pero no en análisis on-chain profundo.
+
+10. SOLUCIÓN DE PROBLEMAS COMUNES
+    - Error "timed out" en el avatar: aumenta el timeout del socket en
+      avatar.py o usa un modelo más rápido (phi3:mini).
+    - El avatar desaparece: el icono de la bandeja del sistema permite
+      restaurarlo (doble clic). Si no, asegúrate de que PyQt5 esté bien
+      instalado.
+    - La bombilla no aparece sobre la cabeza: verifica que las coordenadas de
+      update_bulb_position coincidan con el centro de la cabeza.
+    - "No tengo herramientas para trading": el LLM puede ignorar las
+      herramientas en ciertas preguntas; reformula la pregunta para forzar su
+      uso (p.ej. "Muéstrame el RSI de AAPL" en lugar de "¿Qué opinas de
+      AAPL?").
+
+================================================================================
+                        FIN DE LA DOCUMENTACIÓN
+================================================================================
