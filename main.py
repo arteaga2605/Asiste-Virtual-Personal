@@ -3,11 +3,28 @@ import sys
 import struct
 import socket
 import threading
-from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT
+from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT, OLLAMA_MODEL, OLLAMA_HOST
 from tools.trading import start_binance_stream, get_live_price
 from tools.memory import load_recent_history, save_conversation, save_message
 from agent import process_user_message
-from tools.sports import fetch_sports_data, build_sports_prompt  # <-- nueva importación
+from tools.sports import fetch_sports_data, build_sports_prompt
+import ollama
+
+# Cliente Ollama (el mismo que usa agent.py)
+ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+# System prompts especializados
+SYSTEM_PROMPT_NEWS = (
+    "Eres un analista experto en criptomonedas. Recibes precios en vivo y debes sugerir "
+    "3 criptomonedas 'joyas ocultas' para invertir a 1 día, explicando brevemente cada una. "
+    "Responde solo con texto, sin herramientas ni funciones. Sé conciso."
+)
+
+SYSTEM_PROMPT_SPORTS = (
+    "Eres un analista deportivo experto. Recibes datos de partidos del día (ligas, equipos, "
+    "cuotas) y debes indicar para cada partido qué equipo tiene más probabilidades de ganar, "
+    "con una breve razón. Responde solo con texto, sin herramientas ni funciones. Sé conciso."
+)
 
 
 def recv_exactly(conn, n):
@@ -39,16 +56,21 @@ def build_news_prompt(prices_dict):
         price_lines = "No se pudieron obtener precios en vivo en este momento."
 
     prompt = (
-        "Eres un analista experto en criptomonedas. A continuación tienes los precios actuales "
-        f"(en USDT) de varias criptomonedas obtenidos en tiempo real desde Binance:\n\n"
-        f"{price_lines}\n\n"
-        "Basándote **exclusivamente** en estos precios y en tu conocimiento de mercado, "
-        "sugiere 3 criptomonedas que consideres 'joyas ocultas' para invertir a un plazo de 1 día. "
-        "Explica brevemente por qué cada una podría tener un buen desempeño hoy o mañana. "
-        "Sé conciso y no te salgas del análisis con datos reales. "
-        "No puedes recomendar comprar o vender; solo ofrecer una opinión informada."
+        "A continuación tienes los precios actuales (en USDT) de varias criptomonedas "
+        f"obtenidos en tiempo real desde Binance:\n\n{price_lines}\n\n"
+        "Sugiere 3 criptomonedas 'joyas ocultas' para invertir a 1 día, explicando brevemente cada una."
     )
     return prompt
+
+
+def direct_ollama_query(system_prompt: str, user_prompt: str) -> str:
+    """Envía un prompt directamente a Ollama, sin herramientas ni historial."""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages, stream=False)
+    return response["message"]["content"]
 
 
 def handle_client(conn, addr):
@@ -61,30 +83,33 @@ def handle_client(conn, addr):
         # Cargar historial de conversación reciente (memoria persistente)
         history = load_recent_history(HISTORY_LIMIT)
 
-        # Detectar si es una solicitud especial
+        # --- Manejadores especiales sin herramientas ---
         if user_input.startswith("__NEWS__"):
             live_prices = fetch_live_prices()
-            prompt_ia = build_news_prompt(live_prices)
-            response, updated_history = process_user_message(prompt_ia, history)
+            news_prompt = build_news_prompt(live_prices)
+            response = direct_ollama_query(SYSTEM_PROMPT_NEWS, news_prompt)
+            # Guardar en el historial esta interacción
+            save_message("user", "📰 Noticias del día")
+            save_message("assistant", response)
+            print(f"Respuesta (noticias): {response[:100]}...")
 
-        elif user_input.startswith("__SPORTS__"):          # <-- NUEVA OPCIÓN
+        elif user_input.startswith("__SPORTS__"):
             sports_data = fetch_sports_data()
-            prompt_ia = build_sports_prompt(sports_data)
-            response, updated_history = process_user_message(prompt_ia, history)
+            sports_prompt = build_sports_prompt(sports_data)
+            response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt)
+            save_message("user", "🏈 Análisis deportivo del día")
+            save_message("assistant", response)
+            print(f"Respuesta (deportes): {response[:100]}...")
 
-        elif user_input:
-            response, updated_history = process_user_message(user_input, history)
         else:
-            response = ""
-            updated_history = history
-
-        print(f"Respuesta: {response[:100]}...")
-
-        # Guardar en base de datos los mensajes nuevos
-        num_old = len(history)
-        new_messages = updated_history[num_old:]
-        for msg in new_messages:
-            save_message(msg["role"], msg["content"])
+            # Conversación normal con herramientas y memoria
+            response, updated_history = process_user_message(user_input, history)
+            # Persistir solo los mensajes nuevos (user + assistant)
+            num_old = len(history)
+            new_messages = updated_history[num_old:]
+            for msg in new_messages:
+                save_message(msg["role"], msg["content"])
+            print(f"Respuesta: {response[:100]}...")
 
         # Enviar respuesta al avatar
         response_bytes = response.encode("utf-8")
