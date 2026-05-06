@@ -1,12 +1,24 @@
 # tools/sports.py
 import requests
 
-# Solo las 4 grandes ligas de EE.UU. (más rápidas de obtener y menos datos)
+# Ligas disponibles para análisis deportivo.
+# Ahora incluye fútbol masculino y femenino de varias regiones.
 SPORTS_CONFIG = [
-    {"sport": "basketball", "league": "nba", "name": "NBA"},
-    {"sport": "football",   "league": "nfl", "name": "NFL"},
-    {"sport": "baseball",   "league": "mlb", "name": "MLB"},
-    {"sport": "hockey",     "league": "nhl", "name": "NHL"},
+    # Grandes ligas de EE.UU.
+    {"sport": "basketball", "league": "nba",     "name": "NBA"},
+    {"sport": "football",   "league": "nfl",     "name": "NFL"},
+    {"sport": "baseball",   "league": "mlb",     "name": "MLB"},
+    {"sport": "hockey",     "league": "nhl",     "name": "NHL"},
+    # Fútbol masculino europeo
+    {"sport": "soccer",     "league": "eng.1",   "name": "Premier League"},
+    {"sport": "soccer",     "league": "fra.1",   "name": "Ligue 1"},
+    {"sport": "soccer",     "league": "ned.1",   "name": "Eredivisie"},
+    {"sport": "soccer",     "league": "sco.1",   "name": "Scottish Premiership"},
+    # Fútbol de otras regiones
+    {"sport": "soccer",     "league": "ksa.1",   "name": "Saudi Pro League"},
+    # Fútbol femenino
+    {"sport": "soccer",     "league": "esp.w.1", "name": "Spanish Liga F"},
+    {"sport": "soccer",     "league": "aus.w.1", "name": "A-League Women"},
 ]
 
 BASE_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
@@ -86,7 +98,7 @@ def build_sports_prompt(games_data: list) -> str:
     if not games_data:
         return "No se encontraron partidos programados para hoy en las ligas configuradas."
 
-    # Limitar a 5 partidos para que el prompt no sea enorme
+    # Limitar a 5 partidos para que el prompt sea manejable
     if len(games_data) > 5:
         games_data = games_data[:5]
 
