@@ -151,7 +151,6 @@ class FloatingAvatar(QWidget):
         self.show()
         self.raise_()
 
-    # ----- Foco del campo -----
     def eventFilter(self, obj, event):
         if obj == self.input_field:
             if event.type() == event.FocusIn:
@@ -163,7 +162,6 @@ class FloatingAvatar(QWidget):
                     self.pick_new_destination()
         return super().eventFilter(obj, event)
 
-    # ----- Parpadeo -----
     def schedule_next_blink(self):
         self.blink_timer.stop()
         interval = random.randint(2000, 4000)
@@ -179,7 +177,6 @@ class FloatingAvatar(QWidget):
         self.eye_visible = True
         self.update()
 
-    # ----- Movimiento -----
     def pick_new_destination(self):
         if not self.movement_enabled or self.user_interacting:
             return
@@ -211,7 +208,6 @@ class FloatingAvatar(QWidget):
         new_y = int(current.y() + dy * step_size)
         self.move(new_x, new_y)
 
-    # ----- Comunicación con el servidor -----
     def send_question(self):
         text = self.input_field.text().strip()
         if not text:
@@ -227,24 +223,20 @@ class FloatingAvatar(QWidget):
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1200)  # 20 minutos de espera (ampliado)
+            sock.settimeout(1200)
             sock.connect(("localhost", COMMUNICATION_PORT))
-
             msg_bytes = question.encode("utf-8")
             sock.sendall(struct.pack("!I", len(msg_bytes)) + msg_bytes)
-
             raw_len = sock.recv(4)
             if len(raw_len) < 4:
                 raise ConnectionError("No se recibió la longitud de la respuesta")
             (resp_len,) = struct.unpack("!I", raw_len)
-
             response_data = b""
             while len(response_data) < resp_len:
                 chunk = sock.recv(resp_len - len(response_data))
                 if not chunk:
                     raise ConnectionError("Conexión cerrada antes de recibir toda la respuesta")
                 response_data += chunk
-
             answer = response_data.decode("utf-8")
         except socket.timeout:
             answer = "El servidor sigue procesando la respuesta (puede tardar varios minutos)."
@@ -253,7 +245,6 @@ class FloatingAvatar(QWidget):
         finally:
             if sock:
                 sock.close()
-
         self.thinking_changed.emit(False)
         self.response_ready.emit(answer)
 
@@ -276,34 +267,26 @@ class FloatingAvatar(QWidget):
         head_top = 90 - 45
         self.bulb_label.move(cx - self.bulb_label.width()//2, head_top - 40)
 
-    # ----- Pintado -----
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
         cx = self.avatar_width // 2
         cy = 90
-
         if self.use_custom_image and self.pixmap:
             x = (self.avatar_width - self.pixmap.width()) // 2
             y = cy - self.pixmap.height()//2
             painter.drawPixmap(x, y, self.pixmap)
         else:
-            # Brazos
             painter.setPen(QPen(QColor(100, 70, 30), 5, Qt.SolidLine, Qt.RoundCap))
             shoulder_y = cy - 5
             painter.drawLine(cx - 35, shoulder_y, cx - 60, shoulder_y + 20)
             painter.drawLine(cx - 60, shoulder_y + 20, cx - 50, shoulder_y + 30)
             painter.drawLine(cx + 35, shoulder_y, cx + 60, shoulder_y + 20)
             painter.drawLine(cx + 60, shoulder_y + 20, cx + 50, shoulder_y + 30)
-
-            # Cabeza
             r = 45
             painter.setBrush(QColor(255, 220, 150))
             painter.setPen(QPen(QColor(100, 70, 30), 3))
             painter.drawEllipse(cx - r, cy - r, r*2, r*2)
-
-            # Ojos
             eye_y = cy - 5
             if self.eye_visible:
                 painter.setBrush(Qt.white)
@@ -317,29 +300,23 @@ class FloatingAvatar(QWidget):
                 painter.setPen(QPen(Qt.black, 3))
                 painter.drawLine(cx - 24, eye_y, cx - 10, eye_y)
                 painter.drawLine(cx + 10, eye_y, cx + 24, eye_y)
-
-            # Boca
             painter.setPen(QPen(Qt.black, 3))
             painter.drawArc(cx - 8, cy + 15, 16, 12, 0, -180 * 16)
-
         self.update_bulb_position()
 
-    # ----- Menú contextual (clic derecho) -----
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-
         if self.movement_enabled:
             menu.addAction("🛑 No caminar").triggered.connect(self.toggle_movement)
         else:
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
-
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
         menu.addAction("🏈 Deporte").triggered.connect(self.show_sports_analysis)
+        menu.addAction("📊 Reporte").triggered.connect(self.show_report)   # ← NUEVA OPCIÓN
         menu.addSeparator()
         menu.addAction("👻 Ocultar avatar").triggered.connect(self.hide_to_tray)
         menu.addAction("⬆️ Expandir burbuja").triggered.connect(self.expand_bubble)
         menu.addAction("❌ Esconder burbuja").triggered.connect(self.hide_bubble)
-
         menu.exec_(event.globalPos())
 
     def toggle_movement(self):
@@ -355,6 +332,9 @@ class FloatingAvatar(QWidget):
 
     def show_sports_analysis(self):
         self.start_query("__SPORTS__")
+
+    def show_report(self):                      # ← NUEVO MÉTODO
+        self.start_query("__REPORT__")
 
     def hide_to_tray(self):
         self.hide()
@@ -376,7 +356,6 @@ class FloatingAvatar(QWidget):
     def hide_bubble(self):
         self.response_scroll.hide()
 
-    # ----- Arrastre -----
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
