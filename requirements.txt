@@ -9,3 +9,4 @@ rich>=13.0
 PyQt5>=5.15
 python-dotenv>=1.0
 matplotlib
+requests

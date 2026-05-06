@@ -7,6 +7,7 @@ from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT
 from tools.trading import start_binance_stream, get_live_price
 from tools.memory import load_recent_history, save_conversation, save_message
 from agent import process_user_message
+from tools.sports import fetch_sports_data, build_sports_prompt  # <-- nueva importación
 
 
 def recv_exactly(conn, n):
@@ -60,11 +61,17 @@ def handle_client(conn, addr):
         # Cargar historial de conversación reciente (memoria persistente)
         history = load_recent_history(HISTORY_LIMIT)
 
-        # Detectar si es una solicitud de noticias
+        # Detectar si es una solicitud especial
         if user_input.startswith("__NEWS__"):
             live_prices = fetch_live_prices()
-            news_prompt = build_news_prompt(live_prices)
-            response, updated_history = process_user_message(news_prompt, history)
+            prompt_ia = build_news_prompt(live_prices)
+            response, updated_history = process_user_message(prompt_ia, history)
+
+        elif user_input.startswith("__SPORTS__"):          # <-- NUEVA OPCIÓN
+            sports_data = fetch_sports_data()
+            prompt_ia = build_sports_prompt(sports_data)
+            response, updated_history = process_user_message(prompt_ia, history)
+
         elif user_input:
             response, updated_history = process_user_message(user_input, history)
         else:
@@ -73,14 +80,9 @@ def handle_client(conn, addr):
 
         print(f"Respuesta: {response[:100]}...")
 
-        # Guardar en base de datos los mensajes nuevos (solo los que no estaban en history)
-        # Pero como process_user_message añade al historial el usuario y la respuesta,
-        # podemos guardar todo el updated_history, o solo los mensajes nuevos.
-        # Por simplicidad, guardamos toda la conversación (sobrescribe si no se controla).
-        # Mejor guardamos solo los últimos mensajes añadidos (user y assistant).
-        # Para ello, calculamos la diferencia.
+        # Guardar en base de datos los mensajes nuevos
         num_old = len(history)
-        new_messages = updated_history[num_old:]  # los añadidos durante esta interacción
+        new_messages = updated_history[num_old:]
         for msg in new_messages:
             save_message(msg["role"], msg["content"])
 

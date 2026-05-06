@@ -227,7 +227,7 @@ class FloatingAvatar(QWidget):
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(600)
+            sock.settimeout(1200)  # 20 minutos de espera (ampliado)
             sock.connect(("localhost", COMMUNICATION_PORT))
 
             msg_bytes = question.encode("utf-8")
@@ -324,7 +324,7 @@ class FloatingAvatar(QWidget):
 
         self.update_bulb_position()
 
-    # ----- Menú contextual -----
+    # ----- Menú contextual (clic derecho) -----
     def contextMenuEvent(self, event):
         menu = QMenu(self)
 
@@ -334,6 +334,7 @@ class FloatingAvatar(QWidget):
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
 
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
+        menu.addAction("🏈 Deporte").triggered.connect(self.show_sports_analysis)
         menu.addSeparator()
         menu.addAction("👻 Ocultar avatar").triggered.connect(self.hide_to_tray)
         menu.addAction("⬆️ Expandir burbuja").triggered.connect(self.expand_bubble)
@@ -350,8 +351,10 @@ class FloatingAvatar(QWidget):
             self.target_pos = None
 
     def show_crypto_gems(self):
-        # Enviar marcador especial para que el servidor active el análisis con datos reales
         self.start_query("__NEWS__")
+
+    def show_sports_analysis(self):
+        self.start_query("__SPORTS__")
 
     def hide_to_tray(self):
         self.hide()

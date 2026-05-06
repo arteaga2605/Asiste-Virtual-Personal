@@ -109,6 +109,7 @@ def calculate_indicator(symbol: str, indicator: str, period: int = 14) -> dict:
 # ------------------- DATOS EN TIEMPO REAL (Binance WebSocket) -------------------
 
 _live_prices = {}
+_error_count = 0  # contador para no saturar la consola
 
 def _on_message(ws, message):
     data = json.loads(message)
@@ -117,10 +118,16 @@ def _on_message(ws, message):
     _live_prices[symbol] = price
 
 def _on_error(ws, error):
-    print(f"WebSocket error: {error}")
+    global _error_count
+    _error_count += 1
+    if _error_count % 10 == 1:  # mostrar solo 1 de cada 10 errores
+        print(f"WebSocket error: {error} (ocultos {_error_count-1} errores similares)")
 
 def _on_close(ws, close_status_code, close_msg):
-    print("WebSocket cerrado, reintentando en 5 segundos...")
+    global _error_count
+    _error_count += 1
+    if _error_count % 10 == 1:
+        print("WebSocket cerrado, reintentando...")
     time.sleep(5)
 
 def start_binance_stream(symbols: list):
@@ -139,7 +146,6 @@ def start_binance_stream(symbols: list):
                 on_close=_on_close
             )
             ws.run_forever()
-            # Si sale de run_forever, espera antes de reconectar
             time.sleep(10)
 
     thread = threading.Thread(target=run_ws, daemon=True)
