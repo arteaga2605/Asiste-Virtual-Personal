@@ -4,14 +4,15 @@ import struct
 import socket
 import threading
 import json
+import time
 from collections import defaultdict
-from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT, OLLAMA_MODEL, OLLAMA_HOST
+from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT, OLLAMA_MODEL, OLLAMA_HOST, SPORTS_REFRESH_INTERVAL
 from tools.trading import start_binance_stream, fetch_live_prices_for_news, build_news_prompt
 from tools.memory import load_recent_history, save_message
 from agent import process_user_message
 from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result
 from tools.predictions import save_predictions, get_all_predictions
-from tools.alerts import start_alert_monitor  # <-- NUEVO
+from tools.alerts import start_alert_monitor
 import ollama
 
 ollama_client = ollama.Client(host=OLLAMA_HOST)
@@ -30,6 +31,26 @@ SYSTEM_PROMPT_SPORTS = (
     "sin texto adicional. El formato debe ser: "
     '{"predictions": [{"game": "nombre del partido", "favorite": "nombre del equipo favorito"}]}.'
 )
+
+# ----- Caché de datos deportivos (actualizado cada 45 min) -----
+_sports_cache_lock = threading.Lock()
+_cached_games = None
+_cached_meta = None
+
+def _refresh_sports_cache():
+    """Se ejecuta en un hilo independiente para mantener los datos frescos."""
+    global _cached_games, _cached_meta
+    time.sleep(5)  # dar tiempo al inicio
+    while True:
+        try:
+            games, meta = fetch_sports_data()
+            with _sports_cache_lock:
+                _cached_games = games
+                _cached_meta = meta
+            print(f"Cache deportivo actualizado: {len(games)} partidos.")
+        except Exception as e:
+            print(f"Error refrescando cache deportivo: {e}")
+        time.sleep(SPORTS_REFRESH_INTERVAL)
 
 
 def recv_exactly(conn, n):
@@ -85,7 +106,12 @@ def handle_client(conn, addr):
             print(f"Respuesta (noticias): {response[:100]}...")
 
         elif user_input.startswith("__SPORTS__"):
-            games_data, events_meta = fetch_sports_data()
+            # Usar datos del caché, o fetch inmediato si no hay
+            with _sports_cache_lock:
+                games_data = _cached_games
+                events_meta = _cached_meta
+            if games_data is None:
+                games_data, events_meta = fetch_sports_data()
             sports_prompt = build_sports_prompt(games_data)
             raw_response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt)
 
@@ -157,6 +183,26 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
+        elif user_input.startswith("__HISTORY__"):
+            # Cargar más mensajes que el límite habitual (últimos 100)
+            full_history = load_recent_history(limit=100)
+            if not full_history:
+                response = "No hay conversaciones guardadas todavía."
+            else:
+                lines = ["📜 **Historial de conversación**\n"]
+                for msg in full_history:
+                    role = msg["role"]
+                    content = msg["content"]
+                    if role == "user":
+                        lines.append(f"🧑 **Tú**: {content}")
+                    elif role == "assistant":
+                        lines.append(f"🤖 **Asistente**: {content}")
+                    elif role == "tool":
+                        lines.append(f"🔧 **Herramienta**: {content}")
+                    lines.append("")  # línea en blanco
+                response = "\n".join(lines)
+            # No guardamos esto en la memoria para no mezclar
+
         else:
             response, updated_history = process_user_message(user_input, history)
             num_old = len(history)
@@ -198,9 +244,13 @@ def main():
                           "atomusdt", "maticusdt", "adausdt", "dotusdt", "avaxusdt"])
     print("Stream Binance activo (10 pares).")
 
-    # Iniciar monitor de alertas automáticas
+    # Monitor de alertas automáticas
     start_alert_monitor(interval_minutes=5)
     print("Monitor de alertas iniciado.")
+
+    # Hilo de refresco de caché deportivo (cada 45 min)
+    threading.Thread(target=_refresh_sports_cache, daemon=True).start()
+    print("Refresco automático de datos deportivos iniciado.")
 
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()

@@ -151,24 +151,21 @@ class FloatingAvatar(QWidget):
         # Timer para leer alertas automáticas
         self.alert_timer = QTimer(self)
         self.alert_timer.timeout.connect(self.check_auto_alerts)
-        self.alert_timer.start(10000)  # cada 10 segundos
+        self.alert_timer.start(10000)
         self.last_alert_msg = ""
 
         self.show()
         self.raise_()
 
     def check_auto_alerts(self):
-        """Lee el archivo de alertas y muestra el mensaje si es nuevo."""
         try:
             if os.path.exists(ALERT_FILE):
                 with open(ALERT_FILE, "r", encoding="utf-8") as f:
                     msg = f.read().strip()
                 if msg and msg != self.last_alert_msg:
                     self.last_alert_msg = msg
-                    # Mostrar en la burbuja (sin intervención del usuario)
                     self.response_bubble.setPlainText(f"🔔 **Alerta automática:**\n{msg}")
                     self.response_scroll.show()
-                    # Borrar el archivo para no repetir
                     os.remove(ALERT_FILE)
         except Exception:
             pass
@@ -336,6 +333,7 @@ class FloatingAvatar(QWidget):
         menu.addAction("🏈 Deporte").triggered.connect(self.show_sports_analysis)
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
+        menu.addAction("📜 Historial").triggered.connect(self.show_history)   # <-- NUEVA OPCIÓN
         menu.addAction("👻 Ocultar avatar").triggered.connect(self.hide_to_tray)
         menu.addAction("⬆️ Expandir burbuja").triggered.connect(self.expand_bubble)
         menu.addAction("❌ Esconder burbuja").triggered.connect(self.hide_bubble)
@@ -357,6 +355,9 @@ class FloatingAvatar(QWidget):
 
     def show_report(self):
         self.start_query("__REPORT__")
+
+    def show_history(self):                     # <-- NUEVO MÉTODO
+        self.start_query("__HISTORY__")
 
     def hide_to_tray(self):
         self.hide()
