@@ -312,7 +312,7 @@ class FloatingAvatar(QWidget):
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
         menu.addAction("🏈 Deporte").triggered.connect(self.show_sports_analysis)
-        menu.addAction("📊 Reporte").triggered.connect(self.show_report)   # ← NUEVA OPCIÓN
+        menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
         menu.addAction("👻 Ocultar avatar").triggered.connect(self.hide_to_tray)
         menu.addAction("⬆️ Expandir burbuja").triggered.connect(self.expand_bubble)
@@ -333,7 +333,7 @@ class FloatingAvatar(QWidget):
     def show_sports_analysis(self):
         self.start_query("__SPORTS__")
 
-    def show_report(self):                      # ← NUEVO MÉTODO
+    def show_report(self):
         self.start_query("__REPORT__")
 
     def hide_to_tray(self):
@@ -349,12 +349,24 @@ class FloatingAvatar(QWidget):
             self.show_from_tray()
 
     def expand_bubble(self):
+        """Aumenta la altura máxima del área de la burbuja en 100 px, hasta un máximo de 500."""
         current = self.response_scroll.maximumHeight()
         new_height = min(current + 100, 500)
         self.response_scroll.setMaximumHeight(new_height)
+        # Redimensionar también el widget del chat y la ventana para acomodar el crecimiento
+        self.adjust_window_height(new_height)
 
     def hide_bubble(self):
         self.response_scroll.hide()
+
+    def adjust_window_height(self, bubble_height):
+        """Ajusta la altura de la ventana para dar espacio a la burbuja expandida."""
+        base_height = 350
+        extra_space = max(0, bubble_height - 200)  # 200 es la altura inicial máxima
+        new_total_height = base_height + extra_space
+        self.setFixedSize(self.total_width, new_total_height)
+        # Reubicar el widget del chat para que ocupe el nuevo espacio
+        self.chat_widget.setGeometry(self.avatar_width, 10, self.chat_area_width - 20, new_total_height - 20)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

@@ -4,9 +4,10 @@ import struct
 import socket
 import threading
 import json
+from collections import defaultdict
 from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT, OLLAMA_MODEL, OLLAMA_HOST
-from tools.trading import start_binance_stream, get_live_price
-from tools.memory import load_recent_history, save_conversation, save_message
+from tools.trading import start_binance_stream, fetch_live_prices_for_news, build_news_prompt
+from tools.memory import load_recent_history, save_message
 from agent import process_user_message
 from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result
 from tools.predictions import save_predictions, get_all_predictions
@@ -15,8 +16,9 @@ import ollama
 ollama_client = ollama.Client(host=OLLAMA_HOST)
 
 SYSTEM_PROMPT_NEWS = (
-    "Eres un analista experto en criptomonedas. Recibes precios en vivo y debes sugerir "
-    "3 criptomonedas 'joyas ocultas' para invertir a 1 día, explicando brevemente cada una. "
+    "Eres un analista experto en criptomonedas. Recibes precios en vivo, cambios 24h, "
+    "volumen y RSI de muchas criptomonedas. Debes seleccionar 3 'joyas ocultas' analizando "
+    "RSI bajo (<30) y volumen alto. Explica por qué están infravaloradas y pueden rebotar. "
     "Responde solo con texto, sin herramientas ni funciones. Sé conciso."
 )
 
@@ -38,31 +40,6 @@ def recv_exactly(conn, n):
     return buf
 
 
-def fetch_live_prices():
-    symbols = [
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "LINKUSDT",
-        "ATOMUSDT", "MATICUSDT", "ADAUSDT", "DOTUSDT", "AVAXUSDT"
-    ]
-    prices = {}
-    for sym in symbols:
-        price = get_live_price(sym)
-        if price is not None:
-            prices[sym] = price
-    return prices
-
-
-def build_news_prompt(prices_dict):
-    price_lines = "\n".join([f"- {sym}: ${price:.4f}" for sym, price in prices_dict.items()])
-    if not price_lines:
-        price_lines = "No se pudieron obtener precios en vivo en este momento."
-    prompt = (
-        "A continuación tienes los precios actuales (en USDT) de varias criptomonedas "
-        f"obtenidos en tiempo real desde Binance:\n\n{price_lines}\n\n"
-        "Sugiere 3 criptomonedas 'joyas ocultas' para invertir a 1 día, explicando brevemente cada una."
-    )
-    return prompt
-
-
 def direct_ollama_query(system_prompt: str, user_prompt: str) -> str:
     messages = [
         {"role": "system", "content": system_prompt},
@@ -73,10 +50,6 @@ def direct_ollama_query(system_prompt: str, user_prompt: str) -> str:
 
 
 def format_sports_predictions(predictions_json: str) -> str:
-    """
-    Convierte la respuesta JSON del modelo deportivo en un texto legible.
-    Si el JSON no se puede parsear, devuelve el texto original.
-    """
     try:
         data = json.loads(predictions_json)
         preds = data.get("predictions", [])
@@ -89,7 +62,6 @@ def format_sports_predictions(predictions_json: str) -> str:
             lines.append(f"{i}. **{game}** → Favorito: **{fav}**")
         return "\n".join(lines)
     except Exception:
-        # Si falla el parseo, mostramos el texto original (puede ser un error)
         return predictions_json
 
 
@@ -103,8 +75,8 @@ def handle_client(conn, addr):
         history = load_recent_history(HISTORY_LIMIT)
 
         if user_input.startswith("__NEWS__"):
-            live_prices = fetch_live_prices()
-            news_prompt = build_news_prompt(live_prices)
+            coins_df = fetch_live_prices_for_news(limit=50)
+            news_prompt = build_news_prompt(coins_df)
             response = direct_ollama_query(SYSTEM_PROMPT_NEWS, news_prompt)
             save_message("user", "📰 Noticias del día")
             save_message("assistant", response)
@@ -115,7 +87,6 @@ def handle_client(conn, addr):
             sports_prompt = build_sports_prompt(games_data)
             raw_response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt)
 
-            # Intentar guardar las predicciones estructuradas
             try:
                 pred_json = json.loads(raw_response)
                 predictions = pred_json.get("predictions", [])
@@ -123,12 +94,10 @@ def handle_client(conn, addr):
             except json.JSONDecodeError:
                 print("No se pudo parsear la respuesta JSON del modelo. No se guardan predicciones estructuradas.")
 
-            # Convertir la respuesta JSON a texto legible para mostrar en el avatar
             formatted_response = format_sports_predictions(raw_response)
-
             save_message("user", "🏈 Análisis deportivo del día")
             save_message("assistant", formatted_response)
-            response = formatted_response   # esto se enviará al avatar
+            response = formatted_response
             print(f"Respuesta (deportes): {response[:100]}...")
 
         elif user_input.startswith("__REPORT__"):
@@ -136,27 +105,59 @@ def handle_client(conn, addr):
             if not all_preds:
                 response = "No hay predicciones guardadas aún. Usa primero la opción Deporte."
             else:
-                aciertos = 0
-                fallos = 0
-                resultados = []
+                # Estructura para agrupar por liga
+                league_stats = defaultdict(lambda: {"aciertos": 0, "fallos": 0, "pendientes": 0, "detalles": []})
+                total_aciertos = 0
+                total_fallos = 0
+                total_pendientes = 0
+
                 for pred in all_preds:
                     event_id = pred["event_id"]
                     sport = pred["sport"]
+                    league = pred["league"]
                     league_slug = pred.get("league_slug", "")
                     result = get_event_result(sport, league_slug, event_id)
+                    predicted = pred["favorite"]
+                    teams = pred["teams"]
+
                     if result and result.get("winner"):
                         real_winner = result["winner"]
-                        predicted = pred["favorite"]
                         if predicted and real_winner and predicted.lower() == real_winner.lower():
-                            aciertos += 1
-                            resultados.append(f"✅ {pred['league']}: {pred['teams']} → Predijo **{predicted}**, ganó **{real_winner}**")
+                            league_stats[league]["aciertos"] += 1
+                            total_aciertos += 1
+                            league_stats[league]["detalles"].append(
+                                f"✅ {teams} → Predijo **{predicted}**, ganó **{real_winner}**"
+                            )
                         else:
-                            fallos += 1
-                            resultados.append(f"❌ {pred['league']}: {pred['teams']} → Predijo **{predicted}**, ganó **{real_winner}**")
+                            league_stats[league]["fallos"] += 1
+                            total_fallos += 1
+                            league_stats[league]["detalles"].append(
+                                f"❌ {teams} → Predijo **{predicted}**, ganó **{real_winner}**"
+                            )
                     else:
-                        resultados.append(f"⏳ {pred['league']}: {pred['teams']} → Partido aún no finalizado")
-                response = f"📊 **Reporte de predicciones**\n\nAciertos: {aciertos}\nFallos: {fallos}\n\n" + "\n".join(resultados)
-            # No guardamos en historial conversacional este reporte para no mezclar
+                        league_stats[league]["pendientes"] += 1
+                        total_pendientes += 1
+                        league_stats[league]["detalles"].append(
+                            f"⏳ {teams} → Partido aún no finalizado"
+                        )
+
+                # Construir el mensaje de reporte
+                response = "📊 **Reporte de predicciones**\n\n"
+                response += f"🔹 **Total general**: {total_aciertos} aciertos, {total_fallos} fallos"
+                if total_pendientes > 0:
+                    response += f", {total_pendientes} pendientes"
+                response += "\n\n"
+
+                # Detalle por liga
+                for league, stats in sorted(league_stats.items()):
+                    response += f"**{league}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
+                    if stats['pendientes'] > 0:
+                        response += f", {stats['pendientes']} pendientes"
+                    response += "\n"
+                    for det in stats["detalles"]:
+                        response += f"  {det}\n"
+                    response += "\n"
+
         else:
             response, updated_history = process_user_message(user_input, history)
             num_old = len(history)

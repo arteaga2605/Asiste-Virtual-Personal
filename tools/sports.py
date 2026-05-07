@@ -166,19 +166,28 @@ def build_sports_prompt(games_data: list) -> str:
 
 
 def get_event_result(sport: str, league: str, event_id: str) -> dict | None:
-    """Obtiene el resultado final de un evento (ganador)."""
-    url = BASE_EVENT_URL.format(sport=sport, league=league, event_id=event_id)
+    """
+    Obtiene el resultado final de un evento usando el endpoint de resumen (summary).
+    Retorna un diccionario con 'status' y 'winner', o None si el partido no ha terminado.
+    """
+    summary_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(summary_url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        comps = data.get("competitions", [])
-        if not comps:
+        # Intentar extraer el estado desde el resumen
+        header = data.get("header", {})
+        competitions = header.get("competitions", [])
+        if not competitions:
+            # A veces los datos vienen en 'competitions' directamente
+            competitions = data.get("competitions", [])
+        if not competitions:
             return None
-        comp = comps[0]
+        comp = competitions[0]
         status = comp.get("status", {}).get("type", {}).get("name", "")
-        if "FINAL" not in status and "Final" not in status:
-            return None  # partido no terminado
+        # Si el estado no indica finalizado, no hay resultado
+        if "FINAL" not in status.upper() and "FINAL" not in status:
+            return None
         competitors = comp.get("competitors", [])
         winner = None
         for c in competitors:
