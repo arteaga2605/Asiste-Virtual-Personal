@@ -143,8 +143,8 @@ def get_live_price(symbol: str) -> float:
 # ------------------------------------------------------------
 # NUEVAS FUNCIONES PARA "NOTICIAS DEL DÍA" (joyas cripto)
 # ------------------------------------------------------------
-def _get_klines(symbol: str, interval: str = "1h", limit: int = 20) -> pd.DataFrame:
-    """Descarga velas recientes de un par USDT y devuelve un DataFrame con columnas estándar."""
+def _get_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """Descarga velas de un par USDT y devuelve DataFrame con columnas estándar."""
     url = "https://api.binance.com/api/v3/klines"
     params = {
         "symbol": symbol,
@@ -165,24 +165,32 @@ def _get_klines(symbol: str, interval: str = "1h", limit: int = 20) -> pd.DataFr
         df["OpenTime"] = pd.to_datetime(df["OpenTime"], unit='ms')
         return df
     except Exception as e:
-        print(f"Error descargando klines para {symbol}: {e}")
+        print(f"Error descargando klines para {symbol} ({interval}): {e}")
         return pd.DataFrame()
 
-# Lista de stablecoins conocidas (sin USDT base)
+# Lista de stablecoins conocidas para excluir
 STABLECOINS = {
     "USDC", "BUSD", "TUSD", "USDP", "USDD", "DAI", "FRAX", "LUSD", "USDJ",
     "USTC", "USDS", "FDUSD", "UST", "PAX", "GUSD", "USDX", "CUSD"
 }
 
+def _get_rsi_for_timeframe(symbol: str, interval: str, limit: int, period: int = 14) -> float | None:
+    """Obtiene el RSI(period) para un símbolo usando velas de 'interval'."""
+    df = _get_klines(symbol, interval, limit)
+    if df.empty or len(df) < period:
+        return None
+    rsi_series = calculate_rsi(df["Close"], period)
+    last_val = rsi_series.iloc[-1]
+    if pd.isna(last_val):
+        return None
+    return round(float(last_val), 2)
+
 def fetch_live_prices_for_news(limit: int = 50) -> pd.DataFrame:
     """
-    Amplía el universo de monedas:
-    - Obtiene todos los tickers de USDT de Binance (/api/v3/ticker/24hr).
-    - Filtra solo pares que terminan en USDT.
-    - Excluye stablecoins conocidas.
-    - Ordena por volumen cotizado (quoteVolume) descendente y toma los primeros 'limit'.
-    - Para cada uno descarga 15 velas de 1h y calcula RSI(14) sobre el cierre.
-    - Devuelve un DataFrame con columnas: symbol, lastPrice, priceChangePercent, volume, rsi.
+    Obtiene las 'limit' monedas con mayor volumen USDT (excluyendo stablecoins),
+    y calcula RSI para 1h, 4h y 1d.
+    Retorna un DataFrame con columnas: symbol, lastPrice, priceChangePercent,
+    volume, rsi1h, rsi4h, rsi1d.
     """
     ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
     try:
@@ -193,16 +201,14 @@ def fetch_live_prices_for_news(limit: int = 50) -> pd.DataFrame:
         print(f"Error descargando tickers: {e}")
         return pd.DataFrame()
 
-    # Filtrar pares USDT y excluir stablecoins
     usdt_tickers = []
     for t in all_tickers:
         sym = t["symbol"]
         if not sym.endswith("USDT"):
             continue
-        # Extraer la moneda base (sin el USDT)
-        base = sym[:-4]  # quita "USDT"
+        base = sym[:-4]
         if base.upper() in STABLECOINS:
-            continue  # saltar stablecoins
+            continue
         if t.get("quoteVolume"):
             usdt_tickers.append(t)
 
@@ -214,48 +220,43 @@ def fetch_live_prices_for_news(limit: int = 50) -> pd.DataFrame:
         sym = ticker["symbol"]
         last_price = float(ticker["lastPrice"])
         pct_change = float(ticker["priceChangePercent"])
-        volume = float(ticker["quoteVolume"])  # volumen en USDT
+        volume = float(ticker["quoteVolume"])
 
-        # Obtener velas 1h y calcular RSI
-        klines = _get_klines(sym, interval="1h", limit=15)
-        rsi_val = None
-        if not klines.empty and len(klines) >= 14:
-            close_series = klines["Close"]
-            rsi_series = calculate_rsi(close_series, 14)
-            last_rsi = rsi_series.iloc[-1]
-            if not pd.isna(last_rsi):
-                rsi_val = round(float(last_rsi), 2)
+        # RSI multi‑timeframe
+        rsi1h = _get_rsi_for_timeframe(sym, "1h", 20, 14)
+        rsi4h = _get_rsi_for_timeframe(sym, "4h", 20, 14)
+        rsi1d = _get_rsi_for_timeframe(sym, "1d", 20, 14)
+
         data_rows.append({
             "symbol": sym,
             "lastPrice": last_price,
             "priceChangePercent": pct_change,
             "volume": volume,
-            "rsi14": rsi_val
+            "rsi1h": rsi1h,
+            "rsi4h": rsi4h,
+            "rsi1d": rsi1d
         })
-        time.sleep(0.05)  # pequeño delay para no saturar la API
+        time.sleep(0.1)  # pequeño delay para respetar límites de la API
 
     return pd.DataFrame(data_rows)
 
 
 def build_news_prompt(coins_df: pd.DataFrame) -> str:
-    """
-    Construye un prompt detallado con los datos de las 50 monedas y las instrucciones
-    para encontrar joyas ocultas (RSI bajo, volumen alto, explicar infravaloración).
-    """
+    """Construye el prompt para el LLM con datos multi‑timeframe."""
     if coins_df.empty:
         return "No se pudieron obtener datos de monedas en este momento."
 
-    # Para que el prompt no sea excesivo, limitamos a las 30 primeras
     display_df = coins_df.head(30)
 
-    # Crear líneas por cada moneda
     lines = []
     for _, row in display_df.iterrows():
-        rsi_str = f"{row['rsi14']}" if pd.notna(row["rsi14"]) else "N/D"
+        rsi1h_str = f"{row['rsi1h']}" if pd.notna(row["rsi1h"]) else "N/D"
+        rsi4h_str = f"{row['rsi4h']}" if pd.notna(row["rsi4h"]) else "N/D"
+        rsi1d_str = f"{row['rsi1d']}" if pd.notna(row["rsi1d"]) else "N/D"
         line = (f"- {row['symbol']}: ${row['lastPrice']:.4f}, "
                 f"24h: {row['priceChangePercent']:.2f}%, "
-                f"Volumen: {row['volume']:.0f} USDT, "
-                f"RSI(14): {rsi_str}")
+                f"Vol: {row['volume']:.0f} USDT, "
+                f"RSI(1h)={rsi1h_str}, RSI(4h)={rsi4h_str}, RSI(1d)={rsi1d_str}")
         lines.append(line)
 
     coins_summary = "\n".join(lines)
@@ -263,11 +264,13 @@ def build_news_prompt(coins_df: pd.DataFrame) -> str:
     prompt = (
         "Eres un analista experto en criptomonedas. A continuación tienes los datos actuales "
         f"de {len(display_df)} criptomonedas (pares USDT) obtenidos en tiempo real desde Binance. "
-        "Se incluye el precio, cambio porcentual en 24h, volumen y el RSI de 14 periodos.\n\n"
+        "Se incluye precio, cambio 24h, volumen y RSI de 14 periodos en tres marcos de tiempo: "
+        "1 hora, 4 horas y 1 día.\n\n"
         f"{coins_summary}\n\n"
         "**Tarea**: encuentra 3 criptomonedas que consideres 'joyas ocultas' para invertir "
-        "a un plazo de 1 día. Para hacerlo, ten en cuenta lo siguiente:\n"
-        "- Busca monedas con RSI(14) por debajo de 30 (sobrevendidas) y volumen alto.\n"
+        "a un plazo de 1 día. Para hacerlo, ten en cuenta todo el espectro temporal:\n"
+        "- Busca monedas con RSI bajo (<30) en cualquiera de los plazos, especialmente si coincide en varios.\n"
+        "- El volumen alto es una señal de interés real del mercado.\n"
         "- Explica por qué cada una podría estar infravalorada y por qué puede rebotar.\n"
         "- Responde solo con texto, sin herramientas ni funciones. Sé conciso."
     )

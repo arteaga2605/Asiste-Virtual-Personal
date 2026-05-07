@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
-from config import AVATAR_IMAGE_PATH, THINKING_STATE_FILE, COMMUNICATION_PORT
+from config import AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE, COMMUNICATION_PORT
 
 
 class FloatingAvatar(QWidget):
@@ -148,8 +148,30 @@ class FloatingAvatar(QWidget):
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
 
+        # Timer para leer alertas automáticas
+        self.alert_timer = QTimer(self)
+        self.alert_timer.timeout.connect(self.check_auto_alerts)
+        self.alert_timer.start(10000)  # cada 10 segundos
+        self.last_alert_msg = ""
+
         self.show()
         self.raise_()
+
+    def check_auto_alerts(self):
+        """Lee el archivo de alertas y muestra el mensaje si es nuevo."""
+        try:
+            if os.path.exists(ALERT_FILE):
+                with open(ALERT_FILE, "r", encoding="utf-8") as f:
+                    msg = f.read().strip()
+                if msg and msg != self.last_alert_msg:
+                    self.last_alert_msg = msg
+                    # Mostrar en la burbuja (sin intervención del usuario)
+                    self.response_bubble.setPlainText(f"🔔 **Alerta automática:**\n{msg}")
+                    self.response_scroll.show()
+                    # Borrar el archivo para no repetir
+                    os.remove(ALERT_FILE)
+        except Exception:
+            pass
 
     def eventFilter(self, obj, event):
         if obj == self.input_field:
@@ -349,23 +371,19 @@ class FloatingAvatar(QWidget):
             self.show_from_tray()
 
     def expand_bubble(self):
-        """Aumenta la altura máxima del área de la burbuja en 100 px, hasta un máximo de 500."""
         current = self.response_scroll.maximumHeight()
         new_height = min(current + 100, 500)
         self.response_scroll.setMaximumHeight(new_height)
-        # Redimensionar también el widget del chat y la ventana para acomodar el crecimiento
         self.adjust_window_height(new_height)
 
     def hide_bubble(self):
         self.response_scroll.hide()
 
     def adjust_window_height(self, bubble_height):
-        """Ajusta la altura de la ventana para dar espacio a la burbuja expandida."""
         base_height = 350
-        extra_space = max(0, bubble_height - 200)  # 200 es la altura inicial máxima
+        extra_space = max(0, bubble_height - 200)
         new_total_height = base_height + extra_space
         self.setFixedSize(self.total_width, new_total_height)
-        # Reubicar el widget del chat para que ocupe el nuevo espacio
         self.chat_widget.setGeometry(self.avatar_width, 10, self.chat_area_width - 20, new_total_height - 20)
 
     def mousePressEvent(self, event):

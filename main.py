@@ -11,14 +11,16 @@ from tools.memory import load_recent_history, save_message
 from agent import process_user_message
 from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result
 from tools.predictions import save_predictions, get_all_predictions
+from tools.alerts import start_alert_monitor  # <-- NUEVO
 import ollama
 
 ollama_client = ollama.Client(host=OLLAMA_HOST)
 
 SYSTEM_PROMPT_NEWS = (
     "Eres un analista experto en criptomonedas. Recibes precios en vivo, cambios 24h, "
-    "volumen y RSI de muchas criptomonedas. Debes seleccionar 3 'joyas ocultas' analizando "
-    "RSI bajo (<30) y volumen alto. Explica por qué están infravaloradas y pueden rebotar. "
+    "volumen y RSI en tres marcos temporales (1h, 4h, 1d) de muchas criptomonedas. "
+    "Debes seleccionar 3 'joyas ocultas' analizando RSI bajo y volumen alto. "
+    "Explica por qué están infravaloradas y pueden rebotar. "
     "Responde solo con texto, sin herramientas ni funciones. Sé conciso."
 )
 
@@ -105,7 +107,6 @@ def handle_client(conn, addr):
             if not all_preds:
                 response = "No hay predicciones guardadas aún. Usa primero la opción Deporte."
             else:
-                # Estructura para agrupar por liga
                 league_stats = defaultdict(lambda: {"aciertos": 0, "fallos": 0, "pendientes": 0, "detalles": []})
                 total_aciertos = 0
                 total_fallos = 0
@@ -141,14 +142,12 @@ def handle_client(conn, addr):
                             f"⏳ {teams} → Partido aún no finalizado"
                         )
 
-                # Construir el mensaje de reporte
                 response = "📊 **Reporte de predicciones**\n\n"
                 response += f"🔹 **Total general**: {total_aciertos} aciertos, {total_fallos} fallos"
                 if total_pendientes > 0:
                     response += f", {total_pendientes} pendientes"
                 response += "\n\n"
 
-                # Detalle por liga
                 for league, stats in sorted(league_stats.items()):
                     response += f"**{league}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
                     if stats['pendientes'] > 0:
@@ -198,6 +197,10 @@ def main():
     start_binance_stream(["btcusdt", "ethusdt", "bnbusdt", "solusdt", "linkusdt",
                           "atomusdt", "maticusdt", "adausdt", "dotusdt", "avaxusdt"])
     print("Stream Binance activo (10 pares).")
+
+    # Iniciar monitor de alertas automáticas
+    start_alert_monitor(interval_minutes=5)
+    print("Monitor de alertas iniciado.")
 
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
