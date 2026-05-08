@@ -89,14 +89,11 @@ def _event_is_active(event: dict) -> bool:
 
 
 def _is_today(event_date_utc):
-    """Devuelve True si la fecha UTC del evento corresponde al día de hoy en hora local."""
     if not event_date_utc:
         return False
     try:
-        # La fecha viene en formato ISO 8601, ej.: "2025-05-07T19:00Z"
         event_dt = datetime.fromisoformat(event_date_utc.replace("Z", "+00:00"))
         now_utc = datetime.now(timezone.utc)
-        # Comparar solo año, mes y día
         return event_dt.date() == now_utc.date()
     except:
         return False
@@ -156,18 +153,15 @@ def fetch_sports_data() -> tuple[list, dict]:
                     "sport": config["sport"],
                     "league_slug": config["league"],
                 }
-    # Separar partidos de hoy y del futuro, ordenados por fecha
+    # Separar partidos de hoy y del futuro
     today_games = [g for g in all_games if g["is_today"]]
     future_games = sorted(
         [g for g in all_games if not g["is_today"]],
         key=lambda g: g["start_time"]
     )
-    # Construir lista final: hoy primero, luego próximos
     selected = today_games + future_games
-    # Limitar a 5 partidos
     selected = selected[:5]
-    # Filtrar events_meta a solo los seleccionados
-    filtered_meta = {g["event_id"]: events_meta[g["event_id"]] for g in selected}
+    filtered_meta = {g["event_id"]: events_meta[g["event_id"]] for g in selected if g["event_id"] in events_meta}
     return selected, filtered_meta
 
 
@@ -196,11 +190,18 @@ def build_sports_prompt(games_data: list) -> str:
 
     for game in games_data:
         when = "HOY" if game.get("is_today") else "Próximamente"
-        prompt += f"**{game['league']}** ({when}): {game['summary']} - {game.get('start_time', '')}\n"
+        # Construir línea de equipos con nombres completos
+        team_names = []
+        for team in game["teams"]:
+            home_away = " (Casa)" if team.get("homeAway") == "home" else " (Fuera)" if team.get("homeAway") == "away" else ""
+            team_names.append(f"{team['name']}{home_away}")
+        teams_line = " vs ".join(team_names) if len(team_names) == 2 else " vs ".join(team_names)
+
+        prompt += f"**{game['league']}** ({when}): {teams_line} - {game.get('start_time', '')}\n"
         prompt += f"Estado: {game['status']}\n"
         for team in game["teams"]:
             record = f" ({team['record']})" if team.get("record") else ""
-            prompt += f"  - {team['name']} ({team.get('homeAway', 'N/A')}) {team.get('score', '')}{record}\n"
+            prompt += f"  - {team['name']}: {team.get('score', 'N/A')}{record}\n"
         if game.get("odds"):
             prompt += f"Cuotas: {game['odds']}\n"
         prompt += "\n"

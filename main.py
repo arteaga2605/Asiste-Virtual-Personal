@@ -245,7 +245,7 @@ def main():
     print("Stream Binance activo (10 pares).")
 
     # Monitor de alertas automáticas
-    start_alert_monitor(interval_minutes=5)
+    start_alert_monitor(interval_minutes=10)
     print("Monitor de alertas iniciado.")
 
     # Hilo de refresco de caché deportivo (cada 45 min)
