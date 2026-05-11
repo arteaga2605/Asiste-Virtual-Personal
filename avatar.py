@@ -333,6 +333,9 @@ class FloatingAvatar(QWidget):
         menu.addAction("🏈 Deporte").triggered.connect(self.show_sports_analysis)
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
+        menu.addAction("🎯 Metas").triggered.connect(self.show_goals)            # nuevo
+        menu.addAction("📄 Informe Semanal").triggered.connect(self.show_weekly) # nuevo
+        menu.addSeparator()
         menu.addAction("📜 Historial").triggered.connect(self.show_history)
         menu.addAction("👻 Ocultar avatar").triggered.connect(self.hide_to_tray)
         menu.addAction("⬆️ Expandir burbuja").triggered.connect(self.expand_bubble)
@@ -349,15 +352,16 @@ class FloatingAvatar(QWidget):
 
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
-
     def show_sports_analysis(self):
         self.start_query("__SPORTS__")
-
     def show_report(self):
         self.start_query("__REPORT__")
-
     def show_history(self):
         self.start_query("__HISTORY__")
+    def show_goals(self):
+        self.start_query("__GOALS__")
+    def show_weekly(self):
+        self.start_query("__WEEKLY__")
 
     def hide_to_tray(self):
         self.hide()
@@ -372,21 +376,18 @@ class FloatingAvatar(QWidget):
             self.show_from_tray()
 
     def expand_bubble(self):
-        """Aumenta la altura máxima de la burbuja en 100 px y la muestra."""
         current = self.response_scroll.maximumHeight()
         new_height = min(current + 100, 500)
         self.response_scroll.setMaximumHeight(new_height)
         self.adjust_window_height(new_height)
-        # Mostrar la burbuja aunque estuviera oculta
         self.response_scroll.show()
 
     def hide_bubble(self):
         self.response_scroll.hide()
 
     def adjust_window_height(self, bubble_height):
-        """Ajusta la altura de la ventana para acomodar la burbuja expandida."""
         base_height = 350
-        extra_space = max(0, bubble_height - 200)  # 200 es la altura inicial máxima
+        extra_space = max(0, bubble_height - 200)
         new_total_height = base_height + extra_space
         self.setFixedSize(self.total_width, new_total_height)
         self.chat_widget.setGeometry(

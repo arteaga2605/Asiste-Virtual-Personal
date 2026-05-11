@@ -4,39 +4,7 @@ import threading
 import requests
 import pandas as pd
 from config import ALERT_FILE
-from tools.trading import calculate_rsi, calculate_sma, STABLECOINS
-
-
-def _get_top_symbols(limit=20):
-    """
-    Obtiene los 'limit' símbolos USDT con mayor volumen en 24h,
-    excluyendo stablecoins conocidas.
-    Retorna una lista de strings con los símbolos.
-    """
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"Error obteniendo tickers (alertas): {e}")
-        return []
-
-    filtered = []
-    for t in data:
-        sym = t.get("symbol", "")
-        if not sym.endswith("USDT"):
-            continue
-        base = sym[:-4]
-        if base.upper() in STABLECOINS:
-            continue
-        quote_vol = t.get("quoteVolume")
-        if quote_vol is not None:
-            filtered.append((sym, float(quote_vol)))
-
-    filtered.sort(key=lambda x: x[1], reverse=True)
-    symbols = [sym for sym, _ in filtered[:limit]]
-    return symbols
+from tools.trading import calculate_rsi, calculate_sma, SELECTED_CRYPTO
 
 
 def _get_klines(symbol, interval, limit):
@@ -73,8 +41,7 @@ def _get_rsi(symbol, interval, limit=20, period=14):
 
 
 def _get_sma(symbol, interval, limit=30, period=9):
-    """Calcula la SMA para un símbolo en un intervalo dado.
-    Retorna el valor de la SMA y el precio de cierre actual."""
+    """Calcula la SMA y el precio de cierre actual para un símbolo."""
     df = _get_klines(symbol, interval, limit)
     if df.empty or len(df) < period:
         return None, None
@@ -86,26 +53,13 @@ def _get_sma(symbol, interval, limit=30, period=9):
     return round(float(sma_val), 6), round(float(close_val), 6)
 
 
-def _get_last_price(symbol):
-    """Obtiene el último precio de un símbolo."""
-    try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-        resp = requests.get(url, timeout=5)
-        return float(resp.json()["price"])
-    except:
-        return None
-
-
 def start_alert_monitor(interval_minutes=10):
     """
-    Hilo que verifica periódicamente condiciones de alerta:
-    - RSI 1 Semana y 1 Mes > 70 (sobrecompra) o < 30 (sobreventa)
-    - Precio toca la SMA 9 en 4H, 1D, 1 Semana, 1 Mes
-    Escribe las alertas en ALERT_FILE.
+    Hilo que verifica periódicamente condiciones de alerta para los 10 símbolos fijos.
     """
     def monitor():
         while True:
-            symbols = _get_top_symbols(20)
+            symbols = SELECTED_CRYPTO
             for sym in symbols:
                 alerts = []
 
@@ -129,7 +83,6 @@ def start_alert_monitor(interval_minutes=10):
                 for interval, label in [("4h", "4H"), ("1d", "1D"), ("1w", "1Sem"), ("1M", "1Mes")]:
                     sma_val, close_val = _get_sma(sym, interval, limit=30, period=9)
                     if sma_val is not None and close_val is not None:
-                        # Consideramos "tocar" si la diferencia es < 0.5%
                         if sma_val > 0:
                             diff_pct = abs(close_val - sma_val) / sma_val
                             if diff_pct < 0.005:  # menos del 0.5%
@@ -146,7 +99,7 @@ def start_alert_monitor(interval_minutes=10):
                     except Exception:
                         pass
 
-                time.sleep(0.3)  # pequeño descanso entre símbolos
+                time.sleep(0.3)
 
             time.sleep(interval_minutes * 60)
 

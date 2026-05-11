@@ -7,19 +7,20 @@ import json
 import time
 from collections import defaultdict
 from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT, OLLAMA_MODEL, OLLAMA_HOST, SPORTS_REFRESH_INTERVAL
-from tools.trading import start_binance_stream, fetch_live_prices_for_news, build_news_prompt
+from tools.trading import start_binance_stream, fetch_live_prices_for_news, build_news_prompt, SELECTED_CRYPTO
 from tools.memory import load_recent_history, save_message
 from agent import process_user_message
-from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result
+from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result, enrich_games_with_stats
 from tools.predictions import save_predictions, get_all_predictions
 from tools.alerts import start_alert_monitor
+from tools.business import generate_weekly_report, list_goals
 import ollama
 
 ollama_client = ollama.Client(host=OLLAMA_HOST)
 
 SYSTEM_PROMPT_NEWS = (
     "Eres un analista experto en criptomonedas. Recibes precios en vivo, cambios 24h, "
-    "volumen y RSI en tres marcos temporales (1h, 4h, 1d) de muchas criptomonedas. "
+    "volumen y RSI en tres marcos temporales (1h, 4h, 1d) de las criptomonedas seleccionadas. "
     "Debes seleccionar 3 'joyas ocultas' analizando RSI bajo y volumen alto. "
     "Explica por qué están infravaloradas y pueden rebotar. "
     "Responde solo con texto, sin herramientas ni funciones. Sé conciso."
@@ -27,20 +28,19 @@ SYSTEM_PROMPT_NEWS = (
 
 SYSTEM_PROMPT_SPORTS = (
     "Eres un analista deportivo experto. Recibes datos de partidos del día (ligas, equipos, "
-    "cuotas) y debes devolver exclusivamente un JSON con tus predicciones, "
+    "cuotas, estadísticas avanzadas) y debes devolver exclusivamente un JSON con tus predicciones, "
     "sin texto adicional. El formato debe ser: "
-    '{"predictions": [{"game": "nombre del partido", "favorite": "nombre del equipo favorito"}]}.'
+    '{"predictions": [{"game": "nombre del partido", "favorite": "nombre del equipo favorito", "score": "marcador estimado"}]}.'
 )
 
-# ----- Caché de datos deportivos (actualizado cada 45 min) -----
+# ----- Caché de datos deportivos -----
 _sports_cache_lock = threading.Lock()
 _cached_games = None
 _cached_meta = None
 
 def _refresh_sports_cache():
-    """Se ejecuta en un hilo independiente para mantener los datos frescos."""
     global _cached_games, _cached_meta
-    time.sleep(5)  # dar tiempo al inicio
+    time.sleep(5)
     while True:
         try:
             games, meta = fetch_sports_data()
@@ -82,7 +82,9 @@ def format_sports_predictions(predictions_json: str) -> str:
         for i, pred in enumerate(preds, 1):
             game = pred.get("game", "Partido desconocido")
             fav = pred.get("favorite", "Sin favorito")
-            lines.append(f"{i}. **{game}** → Favorito: **{fav}**")
+            score = pred.get("score", "")
+            score_str = f" ({score})" if score else ""
+            lines.append(f"{i}. **{game}** → Favorito: **{fav}**{score_str}")
         return "\n".join(lines)
     except Exception:
         return predictions_json
@@ -98,7 +100,7 @@ def handle_client(conn, addr):
         history = load_recent_history(HISTORY_LIMIT)
 
         if user_input.startswith("__NEWS__"):
-            coins_df = fetch_live_prices_for_news(limit=50)
+            coins_df = fetch_live_prices_for_news(limit=10)   # ya no se usa el límite, pero lo dejamos
             news_prompt = build_news_prompt(coins_df)
             response = direct_ollama_query(SYSTEM_PROMPT_NEWS, news_prompt)
             save_message("user", "📰 Noticias del día")
@@ -106,7 +108,6 @@ def handle_client(conn, addr):
             print(f"Respuesta (noticias): {response[:100]}...")
 
         elif user_input.startswith("__SPORTS__"):
-            # Usar datos del caché, o fetch inmediato si no hay
             with _sports_cache_lock:
                 games_data = _cached_games
                 events_meta = _cached_meta
@@ -183,8 +184,20 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
+        elif user_input.startswith("__GOALS__"):
+            goals = list_goals(active_only=True)
+            if not goals:
+                response = "No tienes metas activas en este momento. Puedes añadir una usando el chat (ej. 'Añade la meta: aumentar productividad')."
+            else:
+                lines = ["🎯 **Metas actuales**\n"]
+                for g in goals:
+                    lines.append(f"- {g['description']}: {g['current_value']}/{g['target_value']} {g['unit']}")
+                response = "\n".join(lines)
+
+        elif user_input.startswith("__WEEKLY__"):
+            response = generate_weekly_report()
+
         elif user_input.startswith("__HISTORY__"):
-            # Cargar más mensajes que el límite habitual (últimos 100)
             full_history = load_recent_history(limit=100)
             if not full_history:
                 response = "No hay conversaciones guardadas todavía."
@@ -199,9 +212,8 @@ def handle_client(conn, addr):
                         lines.append(f"🤖 **Asistente**: {content}")
                     elif role == "tool":
                         lines.append(f"🔧 **Herramienta**: {content}")
-                    lines.append("")  # línea en blanco
+                    lines.append("")
                 response = "\n".join(lines)
-            # No guardamos esto en la memoria para no mezclar
 
         else:
             response, updated_history = process_user_message(user_input, history)
@@ -240,15 +252,13 @@ def start_server():
 
 def main():
     print("Iniciando asistente virtual...")
-    start_binance_stream(["btcusdt", "ethusdt", "bnbusdt", "solusdt", "linkusdt",
-                          "atomusdt", "maticusdt", "adausdt", "dotusdt", "avaxusdt"])
-    print("Stream Binance activo (10 pares).")
+    # Stream sólo con las 10 criptomonedas seleccionadas
+    start_binance_stream(SELECTED_CRYPTO)
+    print("Stream Binance activo (10 criptos seleccionadas).")
 
-    # Monitor de alertas automáticas
     start_alert_monitor(interval_minutes=10)
-    print("Monitor de alertas iniciado.")
+    print("Monitor de alertas iniciado (10 criptos).")
 
-    # Hilo de refresco de caché deportivo (cada 45 min)
     threading.Thread(target=_refresh_sports_cache, daemon=True).start()
     print("Refresco automático de datos deportivos iniciado.")
 

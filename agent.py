@@ -3,7 +3,6 @@ import ollama
 from config import OLLAMA_MODEL, OLLAMA_HOST
 import json
 
-# Importamos las herramientas reales
 from tools.trading import (
     get_symbol_data, 
     calculate_indicator, 
@@ -13,21 +12,20 @@ from tools.trading import (
 from tools.business import (
     add_note, list_notes,
     add_task, list_tasks, update_task_status,
-    add_contact, list_contacts
+    add_contact, list_contacts,
+    add_goal, list_goals, update_goal_progress   # <-- nuevas herramientas
 )
 from tools.code_executor import execute_python_code
 
-# Configurar cliente
 ollama_client = ollama.Client(host=OLLAMA_HOST)
 
-# Definición de herramientas en formato OpenAI (compatible con Ollama)
 TOOLS = [
     # ---------- Trading ----------
     {
         "type": "function",
         "function": {
             "name": "get_symbol_data",
-            "description": "Obtiene datos históricos resumidos de un símbolo (ej. EURUSD, AAPL). Necesita archivo CSV local.",
+            "description": "Obtiene datos históricos resumidos de un símbolo (ej. AAPL). Necesita archivo CSV local.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -165,12 +163,52 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}}
         }
     },
+    # Nuevas herramientas de metas
+    {
+        "type": "function",
+        "function": {
+            "name": "add_goal",
+            "description": "Añade una meta empresarial (ej. 'aumentar productividad 20%').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "Descripción de la meta."},
+                    "target_value": {"type": "number", "description": "Valor objetivo (por defecto 100)."},
+                    "unit": {"type": "string", "description": "Unidad (%, unidades, etc.), por defecto '%'."}
+                },
+                "required": ["description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_goals",
+            "description": "Lista las metas activas.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_goal_progress",
+            "description": "Actualiza el progreso de una meta (valor actual).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal_id": {"type": "integer"},
+                    "current_value": {"type": "number"}
+                },
+                "required": ["goal_id", "current_value"]
+            }
+        }
+    },
     # ---------- Código ----------
     {
         "type": "function",
         "function": {
             "name": "execute_python_code",
-            "description": "Ejecuta código Python de forma segura y devuelve la salida. Usa esta herramienta para probar fragmentos de código o ejecutar estrategias de trading.",
+            "description": "Ejecuta código Python de forma segura y devuelve la salida.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -182,7 +220,6 @@ TOOLS = [
     }
 ]
 
-# Mapeo de nombres de función a funciones Python
 FUNCTION_MAP = {
     "get_symbol_data": get_symbol_data,
     "calculate_indicator": calculate_indicator,
@@ -195,6 +232,9 @@ FUNCTION_MAP = {
     "add_contact": add_contact,
     "list_contacts": list_contacts,
     "execute_python_code": execute_python_code,
+    "add_goal": add_goal,
+    "list_goals": list_goals,
+    "update_goal_progress": update_goal_progress,
 }
 
 SYSTEM_PROMPT = """
@@ -202,26 +242,20 @@ Eres un asistente virtual personal, amigable y servicial. Tu nombre es "Aria". P
 
 Áreas de especialidad:
 - Trading y análisis de mercado (interpretar indicadores, datos históricos y precios en vivo de Binance).
-- Gestión de empresa (notas, tareas, contactos).
+- Gestión de empresa (notas, tareas, contactos, metas de productividad).
 - Programación Python (escribir, explicar y ejecutar código de forma segura).
 
-Tienes acceso a herramientas para realizar acciones concretas. Úsalas solo cuando sea necesario (por ejemplo, si el usuario pide un cálculo, un precio en vivo, o administrar una tarea). Para saludos, preguntas generales o conversación casual, simplemente responde de manera natural y cálida, **sin usar herramientas**.
+Tienes acceso a herramientas para realizar acciones concretas. Úsalas solo cuando sea necesario. Para saludos, preguntas generales o conversación casual, simplemente responde de manera natural y cálida, **sin usar herramientas**.
 
 Siempre responde en español, de forma clara y amable. Si no sabes algo, dilo honestamente.
 """
 
 def process_user_message(user_message: str, conversation_history: list = None):
-    """
-    Procesa un mensaje del usuario, manteniendo el historial de conversación.
-    Devuelve (respuesta, historial_actualizado).
-    """
     if conversation_history is None:
         conversation_history = []
 
-    # Añadir mensaje del usuario al historial
     conversation_history.append({"role": "user", "content": user_message})
 
-    # Llamar al modelo con herramientas
     response = ollama_client.chat(
         model=OLLAMA_MODEL,
         messages=[
@@ -234,10 +268,8 @@ def process_user_message(user_message: str, conversation_history: list = None):
 
     assistant_message = response["message"]
 
-    # Si el modelo solicitó una herramienta
     if assistant_message.get("tool_calls"):
         tool_calls = assistant_message["tool_calls"]
-        # Ejecutar cada herramienta y agregar resultados al historial
         for tool_call in tool_calls:
             func_name = tool_call["function"]["name"]
             func_args = tool_call["function"]["arguments"]
@@ -251,14 +283,12 @@ def process_user_message(user_message: str, conversation_history: list = None):
             else:
                 result_str = json.dumps({"error": f"Función {func_name} no encontrada."})
 
-            # Añadir al historial como mensaje de la herramienta
             conversation_history.append({
                 "role": "tool",
                 "content": result_str,
                 "name": func_name
             })
 
-        # Segunda llamada al modelo con los resultados de las herramientas
         final_response = ollama_client.chat(
             model=OLLAMA_MODEL,
             messages=[
@@ -271,6 +301,5 @@ def process_user_message(user_message: str, conversation_history: list = None):
     else:
         final_content = assistant_message["content"]
 
-    # Añadir respuesta del asistente al historial
     conversation_history.append({"role": "assistant", "content": final_content})
     return final_content, conversation_history

@@ -1,7 +1,7 @@
 # tools/sports.py
 import requests
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 SPORTS_CONFIG = [
     # Grandes ligas de EE.UU.
@@ -38,6 +38,7 @@ ACTIVE_STATUSES = {
 
 BASE_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
 BASE_EVENT_URL = "https://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/events/{event_id}/competitions/{event_id}"
+SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
 
 
 def get_today_scoreboard(sport: str, league: str) -> list:
@@ -99,12 +100,46 @@ def _is_today(event_date_utc):
         return False
 
 
+def _get_detailed_stats(sport: str, league: str, event_id: str) -> dict:
+    url = SUMMARY_URL.format(sport=sport, league=league, event_id=event_id)
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Error obteniendo summary para {event_id}: {e}")
+        return {}
+
+    boxscore = data.get("boxscore", {})
+    teams_stats = boxscore.get("teams", [])
+    stats_dict = {}
+    for team in teams_stats:
+        team_name = team.get("team", {}).get("displayName", "Desconocido")
+        statistics_list = team.get("statistics", [])
+        stats_summary = {}
+        for stat in statistics_list:
+            name = stat.get("name", "otro")
+            display_val = stat.get("displayValue", stat.get("value", ""))
+            if display_val and display_val != "":
+                stats_summary[name] = display_val
+        stats_dict[team_name] = stats_summary
+    return stats_dict
+
+
+def enrich_games_with_stats(games: list) -> list:
+    for game in games:
+        sport = game.get("sport")
+        league = game.get("league_slug")
+        event_id = game.get("event_id")
+        if sport and league and event_id:
+            stats = _get_detailed_stats(sport, league, event_id)
+            game["detailed_stats"] = stats
+        else:
+            game["detailed_stats"] = {}
+    return games
+
+
 def fetch_sports_data() -> tuple[list, dict]:
-    """
-    Retorna una tupla:
-    - Lista de juegos procesados (priorizando los de hoy, hasta 5 partidos)
-    - Diccionario de metadatos event_id -> info del evento
-    """
     all_games = []
     events_meta = {}
     for config in SPORTS_CONFIG:
@@ -126,7 +161,8 @@ def fetch_sports_data() -> tuple[list, dict]:
                 "event_id": event_id,
                 "sport": config["sport"],
                 "league_slug": config["league"],
-                "is_today": _is_today(start_time)
+                "is_today": _is_today(start_time),
+                "detailed_stats": {}
             }
             competitions = event.get("competitions", [])
             for comp in competitions:
@@ -153,7 +189,6 @@ def fetch_sports_data() -> tuple[list, dict]:
                     "sport": config["sport"],
                     "league_slug": config["league"],
                 }
-    # Separar partidos de hoy y del futuro
     today_games = [g for g in all_games if g["is_today"]]
     future_games = sorted(
         [g for g in all_games if not g["is_today"]],
@@ -161,6 +196,7 @@ def fetch_sports_data() -> tuple[list, dict]:
     )
     selected = today_games + future_games
     selected = selected[:5]
+    selected = enrich_games_with_stats(selected)
     filtered_meta = {g["event_id"]: events_meta[g["event_id"]] for g in selected if g["event_id"] in events_meta}
     return selected, filtered_meta
 
@@ -174,7 +210,7 @@ def build_sports_prompt(games_data: list) -> str:
 
     prompt = (
         "Eres un analista deportivo experto. Analiza los siguientes partidos "
-        "y sugiere los equipos con mayores probabilidades de ganar.\n"
+        "y sugiere los equipos con mayores probabilidades de ganar, **incluyendo el marcador estimado**.\n"
     )
     if today_candidates:
         prompt += f"Partidos de hoy ({len(today_candidates)}):\n"
@@ -184,18 +220,17 @@ def build_sports_prompt(games_data: list) -> str:
     prompt += (
         "⚠️ IMPORTANTE: Devuelve tu respuesta **exclusivamente** en formato JSON, "
         "sin texto adicional fuera del JSON. El JSON debe tener la siguiente estructura:\n"
-        '{"predictions": [{"game": "nombre del partido o resumen", "favorite": "nombre del equipo favorito"}]}\n'
+        '{"predictions": [{"game": "nombre del partido o resumen", "favorite": "nombre del equipo favorito", "score": "marcador estimado (ej. 3-2)"}]}\n'
         "No uses herramientas ni funciones. Responde solo con el JSON.\n\n"
     )
 
     for game in games_data:
         when = "HOY" if game.get("is_today") else "Próximamente"
-        # Construir línea de equipos con nombres completos
         team_names = []
         for team in game["teams"]:
-            home_away = " (Casa)" if team.get("homeAway") == "home" else " (Fuera)" if team.get("homeAway") == "away" else ""
-            team_names.append(f"{team['name']}{home_away}")
-        teams_line = " vs ".join(team_names) if len(team_names) == 2 else " vs ".join(team_names)
+            tag = " (Casa)" if team.get("homeAway") == "home" else " (Fuera)" if team.get("homeAway") == "away" else ""
+            team_names.append(f"{team['name']}{tag}")
+        teams_line = " vs ".join(team_names)
 
         prompt += f"**{game['league']}** ({when}): {teams_line} - {game.get('start_time', '')}\n"
         prompt += f"Estado: {game['status']}\n"
@@ -204,6 +239,13 @@ def build_sports_prompt(games_data: list) -> str:
             prompt += f"  - {team['name']}: {team.get('score', 'N/A')}{record}\n"
         if game.get("odds"):
             prompt += f"Cuotas: {game['odds']}\n"
+        detailed = game.get("detailed_stats", {})
+        if detailed:
+            prompt += "Estadísticas avanzadas:\n"
+            for team_name, stats in detailed.items():
+                if stats:
+                    stat_str = ", ".join([f"{k}: {v}" for k, v in stats.items()])
+                    prompt += f"  {team_name}: {stat_str}\n"
         prompt += "\n"
 
     prompt += "Proporciona el JSON con las predicciones para estos partidos."
@@ -212,31 +254,57 @@ def build_sports_prompt(games_data: list) -> str:
 
 def get_event_result(sport: str, league: str, event_id: str) -> dict | None:
     """
-    Obtiene el resultado final de un evento usando el endpoint de resumen (summary).
-    Retorna un diccionario con 'status' y 'winner', o None si el partido no ha terminado.
+    Obtiene el resultado final de un evento.
+    Ahora se basa en el campo 'completed' del summary y extrae el ganador de forma robusta.
     """
     summary_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
     try:
         resp = requests.get(summary_url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        header = data.get("header", {})
-        competitions = header.get("competitions", [])
-        if not competitions:
-            competitions = data.get("competitions", [])
-        if not competitions:
-            return None
-        comp = competitions[0]
-        status = comp.get("status", {}).get("type", {}).get("name", "")
-        if "FINAL" not in status.upper() and "FINAL" not in status:
-            return None
-        competitors = comp.get("competitors", [])
-        winner = None
-        for c in competitors:
-            if c.get("winner"):
-                winner = c.get("team", {}).get("displayName")
-                break
-        return {"status": status, "winner": winner}
     except Exception as e:
-        print(f"Error obteniendo resultado para {event_id}: {e}")
+        print(f"Error obteniendo summary para resultado de {event_id}: {e}")
         return None
+
+    # Obtener la competición principal
+    header = data.get("header", {})
+    competitions = header.get("competitions", [])
+    if not competitions:
+        competitions = data.get("competitions", [])
+    if not competitions:
+        return None
+
+    comp = competitions[0]
+    status_info = comp.get("status", {})
+    # Comprobar si el evento está completado usando el booleano 'completed'
+    completed = status_info.get("type", {}).get("completed", False)
+    if not completed:
+        # También podemos revisar el nombre del estado por si acaso
+        status_name = status_info.get("type", {}).get("name", "").upper()
+        if "FINAL" not in status_name and "FULL_TIME" not in status_name and "COMPLETE" not in status_name:
+            return None  # No finalizado
+
+    # Extraer los competidores
+    competitors = comp.get("competitors", [])
+    winner = None
+
+    # Buscar el ganador explícito
+    for c in competitors:
+        if c.get("winner"):
+            winner = c.get("team", {}).get("displayName")
+            break
+
+    # Si no hay ganador explícito, decidir por marcador
+    if not winner and len(competitors) == 2:
+        scores = []
+        for c in competitors:
+            score_str = c.get("score", "0")
+            try:
+                scores.append(int(float(score_str)))
+            except:
+                scores.append(0)
+        if scores[0] != scores[1]:
+            winner_idx = 0 if scores[0] > scores[1] else 1
+            winner = competitors[winner_idx].get("team", {}).get("displayName")
+
+    return {"status": status_info.get("type", {}).get("name", "Desconocido"), "winner": winner}

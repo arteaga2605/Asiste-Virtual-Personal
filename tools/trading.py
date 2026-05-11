@@ -9,7 +9,7 @@ import requests
 from config import DATA_DIR, BINANCE_WS_URL
 
 # ------------------------------------------------------------
-# Funciones ya existentes (mantenidas sin cambios)
+# Funciones ya existentes (sin cambios)
 # ------------------------------------------------------------
 def load_historical_data(symbol: str) -> pd.DataFrame:
     filepath = f"{DATA_DIR}/{symbol.upper()}.csv"
@@ -141,16 +141,18 @@ def get_live_price(symbol: str) -> float:
     return _live_prices.get(symbol.upper(), None)
 
 # ------------------------------------------------------------
-# NUEVAS FUNCIONES PARA "NOTICIAS DEL DÍA" (joyas cripto)
+# LISTA FIJA DE CRIPTOMONEDAS (ACTUALIZADA: +AVAX +UNI, -HYPE)
 # ------------------------------------------------------------
+SELECTED_CRYPTO = [
+    "BTCUSDT", "XRPUSDT", "BNBUSDT", "SOLUSDT",
+    "TRXUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT",
+    "DOTUSDT", "AVAXUSDT", "UNIUSDT"
+]
+
 def _get_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     """Descarga velas de un par USDT y devuelve DataFrame con columnas estándar."""
     url = "https://api.binance.com/api/v3/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
@@ -168,11 +170,6 @@ def _get_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
         print(f"Error descargando klines para {symbol} ({interval}): {e}")
         return pd.DataFrame()
 
-# Lista de stablecoins conocidas para excluir
-STABLECOINS = {
-    "USDC", "BUSD", "TUSD", "USDP", "USDD", "DAI", "FRAX", "LUSD", "USDJ",
-    "USTC", "USDS", "FDUSD", "UST", "PAX", "GUSD", "USDX", "CUSD"
-}
 
 def _get_rsi_for_timeframe(symbol: str, interval: str, limit: int, period: int = 14) -> float | None:
     """Obtiene el RSI(period) para un símbolo usando velas de 'interval'."""
@@ -185,14 +182,14 @@ def _get_rsi_for_timeframe(symbol: str, interval: str, limit: int, period: int =
         return None
     return round(float(last_val), 2)
 
-def fetch_live_prices_for_news(limit: int = 50) -> pd.DataFrame:
+
+def fetch_live_prices_for_news(limit: int = 20) -> pd.DataFrame:
     """
-    Obtiene las 'limit' monedas con mayor volumen USDT (excluyendo stablecoins),
-    y calcula RSI para 1h, 4h y 1d.
-    Retorna un DataFrame con columnas: symbol, lastPrice, priceChangePercent,
-    volume, rsi1h, rsi4h, rsi1d.
+    Ahora solo usa las 11 criptomonedas fijas.
+    Calcula precio, cambio 24h, volumen y RSI en 1h, 4h, 1d.
     """
     ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
+    all_tickers = []
     try:
         resp = requests.get(ticker_url, timeout=15)
         resp.raise_for_status()
@@ -201,28 +198,22 @@ def fetch_live_prices_for_news(limit: int = 50) -> pd.DataFrame:
         print(f"Error descargando tickers: {e}")
         return pd.DataFrame()
 
-    usdt_tickers = []
+    # Filtrar solo los que están en SELECTED_CRYPTO
+    ticker_map = {}
     for t in all_tickers:
         sym = t["symbol"]
-        if not sym.endswith("USDT"):
-            continue
-        base = sym[:-4]
-        if base.upper() in STABLECOINS:
-            continue
-        if t.get("quoteVolume"):
-            usdt_tickers.append(t)
-
-    usdt_tickers.sort(key=lambda x: float(x["quoteVolume"]), reverse=True)
-    top = usdt_tickers[:limit]
+        if sym in SELECTED_CRYPTO:
+            ticker_map[sym] = t
 
     data_rows = []
-    for ticker in top:
-        sym = ticker["symbol"]
+    for sym in SELECTED_CRYPTO:
+        if sym not in ticker_map:
+            continue
+        ticker = ticker_map[sym]
         last_price = float(ticker["lastPrice"])
         pct_change = float(ticker["priceChangePercent"])
         volume = float(ticker["quoteVolume"])
 
-        # RSI multi‑timeframe
         rsi1h = _get_rsi_for_timeframe(sym, "1h", 20, 14)
         rsi4h = _get_rsi_for_timeframe(sym, "4h", 20, 14)
         rsi1d = _get_rsi_for_timeframe(sym, "1d", 20, 14)
@@ -236,20 +227,18 @@ def fetch_live_prices_for_news(limit: int = 50) -> pd.DataFrame:
             "rsi4h": rsi4h,
             "rsi1d": rsi1d
         })
-        time.sleep(0.1)  # pequeño delay para respetar límites de la API
+        time.sleep(0.1)
 
     return pd.DataFrame(data_rows)
 
 
 def build_news_prompt(coins_df: pd.DataFrame) -> str:
-    """Construye el prompt para el LLM con datos multi‑timeframe."""
+    """Construye el prompt para el LLM con datos multi‑timeframe de las criptos seleccionadas."""
     if coins_df.empty:
-        return "No se pudieron obtener datos de monedas en este momento."
-
-    display_df = coins_df.head(30)
+        return "No se pudieron obtener datos de las criptomonedas seleccionadas."
 
     lines = []
-    for _, row in display_df.iterrows():
+    for _, row in coins_df.iterrows():
         rsi1h_str = f"{row['rsi1h']}" if pd.notna(row["rsi1h"]) else "N/D"
         rsi4h_str = f"{row['rsi4h']}" if pd.notna(row["rsi4h"]) else "N/D"
         rsi1d_str = f"{row['rsi1d']}" if pd.notna(row["rsi1d"]) else "N/D"
@@ -263,7 +252,7 @@ def build_news_prompt(coins_df: pd.DataFrame) -> str:
 
     prompt = (
         "Eres un analista experto en criptomonedas. A continuación tienes los datos actuales "
-        f"de {len(display_df)} criptomonedas (pares USDT) obtenidos en tiempo real desde Binance. "
+        f"de las criptomonedas seleccionadas (pares USDT) obtenidos en tiempo real desde Binance. "
         "Se incluye precio, cambio 24h, volumen y RSI de 14 periodos en tres marcos de tiempo: "
         "1 hora, 4 horas y 1 día.\n\n"
         f"{coins_summary}\n\n"
