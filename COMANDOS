@@ -1,1 +1,36 @@
 python main.py
+
+
+1. Añadir una meta
+Simplemente escribe en el campo de texto algo parecido a esto:
+
+text
+Añade la meta: aumentar productividad al 20%
+El asistente interpretará tu intención, usará la herramienta add_goal y confirmará la creación.
+Puedes personalizar el valor objetivo y la unidad. Por ejemplo:
+
+"Crear meta: ventas mensuales, objetivo 50000, unidad €"
+
+"Añadir meta: leer 12 libros este año, unidad libros"
+
+Si no especificas unidad, se usará % por defecto y el valor objetivo será 100.
+
+2. Ver tus metas activas
+Desde el menú: haz clic derecho en el avatar → selecciona 🎯 Metas.
+
+Desde el chat: escribe "Muéstrame mis metas" o "Lista las metas".
+
+3. Actualizar el progreso de una meta
+Di algo como:
+
+text
+Actualiza la meta 1 al 50%
+El asistente usará update_goal_progress para cambiar el valor actual. El identificador (1) es el número que ves en la lista de metas.
+
+4. Marcar una meta como completada
+Actualmente no existe una acción "completar" automática, pero puedes desactivarla usando la herramienta deactivate_goal (aunque no está expuesta en el modelo; solo se puede llamar internamente).
+Para hacerlo más fácil, puedo añadir una función complete_goal que marque la meta como inactiva y, si quieres, la muestre en el informe como cumplida.
+
+¿Quieres que implemente esa mejora ahora? Es muy sencillo: agregaré la función complete_goal a las herramientas del agente para que puedas decir “Completar la meta 1” y aparecerá como finalizada.
+
+Si te parece bien, procedo y te entrego el código modificado.
