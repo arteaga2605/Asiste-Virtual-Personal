@@ -1,11 +1,12 @@
 # tools/predictions.py
 import sqlite3
 import json
+from datetime import datetime
 from config import BUSINESS_DB_PATH
 
 def init_predictions():
     conn = sqlite3.connect(BUSINESS_DB_PATH)
-    # Crear la tabla si no existe (con todas las columnas actuales)
+    # Tabla de predicciones deportivas (ya existente)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS predictions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,15 +21,29 @@ def init_predictions():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Añadir la columna predicted_score si no existe (para bases de datos antiguas)
     try:
         conn.execute("ALTER TABLE predictions ADD COLUMN predicted_score TEXT")
     except sqlite3.OperationalError:
-        # La columna ya existe, no se hace nada
         pass
+
+    # NUEVA tabla para predicciones de criptomonedas (inicialmente solo Bitcoin)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS crypto_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
+            direction TEXT NOT NULL,
+            target_price REAL,
+            current_price REAL,
+            response_json TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            checked INTEGER DEFAULT 0,
+            result TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
+# ––– Predicciones deportivas (sin cambios) –––
 def save_predictions(predictions_data: list, response_json: str, events_meta: dict):
     conn = sqlite3.connect(BUSINESS_DB_PATH)
     for pred in predictions_data:
@@ -41,13 +56,25 @@ def save_predictions(predictions_data: list, response_json: str, events_meta: di
         league_slug = ""
         teams_json = ""
         for eid, meta in events_meta.items():
-            if game_name in meta.get("summary", ""):
+            if meta.get("summary", "") == game_name:
                 event_id = eid
                 sport = meta.get("sport", "")
                 league = meta.get("league", "")
                 league_slug = meta.get("league_slug", "")
                 teams_json = json.dumps(meta.get("teams", []))
                 break
+        if not event_id:
+            for eid, meta in events_meta.items():
+                summary = meta.get("summary", "")
+                words_pred = set(game_name.lower().replace("-", " ").split())
+                words_summary = set(summary.lower().split())
+                if len(words_pred & words_summary) >= 2:
+                    event_id = eid
+                    sport = meta.get("sport", "")
+                    league = meta.get("league", "")
+                    league_slug = meta.get("league_slug", "")
+                    teams_json = json.dumps(meta.get("teams", []))
+                    break
         if event_id:
             conn.execute("DELETE FROM predictions WHERE event_id = ?", (event_id,))
             conn.execute(
@@ -64,4 +91,32 @@ def get_all_predictions():
     return [{"id": r[0], "event_id": r[1], "sport": r[2], "league": r[3], "league_slug": r[4],
              "teams": r[5], "favorite": r[6], "predicted_score": r[7], "timestamp": r[8]} for r in rows]
 
+# ––– Nuevas funciones para predicciones de Bitcoin –––
+def save_crypto_prediction(direction: str, target_price: float, current_price: float, response_json: str):
+    """Guarda una nueva predicción de criptomoneda (BTC)."""
+    conn = sqlite3.connect(BUSINESS_DB_PATH)
+    conn.execute(
+        "INSERT INTO crypto_predictions (symbol, direction, target_price, current_price, response_json) VALUES (?, ?, ?, ?, ?)",
+        ("BTCUSDT", direction, target_price, current_price, response_json)
+    )
+    conn.commit()
+    conn.close()
+
+def get_all_crypto_predictions():
+    """Obtiene todas las predicciones de criptomonedas."""
+    conn = sqlite3.connect(BUSINESS_DB_PATH)
+    rows = conn.execute("SELECT id, symbol, direction, target_price, current_price, response_json, timestamp, checked, result FROM crypto_predictions").fetchall()
+    conn.close()
+    return [{"id": r[0], "symbol": r[1], "direction": r[2], "target_price": r[3],
+             "current_price": r[4], "response_json": r[5], "timestamp": r[6],
+             "checked": r[7], "result": r[8]} for r in rows]
+
+def update_crypto_prediction_result(pred_id: int, result: str):
+    """Marca una predicción con el resultado ('acierto' o 'fallo') y checked=1."""
+    conn = sqlite3.connect(BUSINESS_DB_PATH)
+    conn.execute("UPDATE crypto_predictions SET result = ?, checked = 1 WHERE id = ?", (result, pred_id))
+    conn.commit()
+    conn.close()
+
+# Inicializar al importar
 init_predictions()

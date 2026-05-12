@@ -5,10 +5,10 @@ import requests
 import pandas as pd
 from config import ALERT_FILE
 from tools.trading import calculate_rsi, calculate_sma, SELECTED_CRYPTO
+from tools.business import get_upcoming_tasks
 
 
 def _get_klines(symbol, interval, limit):
-    """Obtiene velas para un símbolo e intervalo dados."""
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     try:
@@ -29,7 +29,6 @@ def _get_klines(symbol, interval, limit):
 
 
 def _get_rsi(symbol, interval, limit=20, period=14):
-    """Calcula el RSI para un símbolo en un intervalo dado."""
     df = _get_klines(symbol, interval, limit)
     if df.empty or len(df) < period:
         return None
@@ -41,7 +40,6 @@ def _get_rsi(symbol, interval, limit=20, period=14):
 
 
 def _get_sma(symbol, interval, limit=30, period=9):
-    """Calcula la SMA y el precio de cierre actual para un símbolo."""
     df = _get_klines(symbol, interval, limit)
     if df.empty or len(df) < period:
         return None, None
@@ -54,16 +52,12 @@ def _get_sma(symbol, interval, limit=30, period=9):
 
 
 def start_alert_monitor(interval_minutes=10):
-    """
-    Hilo que verifica periódicamente condiciones de alerta para los 10 símbolos fijos.
-    """
     def monitor():
         while True:
             symbols = SELECTED_CRYPTO
             for sym in symbols:
                 alerts = []
 
-                # --- RSI 1 Semana (>70 o <30) ---
                 rsi_1w = _get_rsi(sym, "1w", limit=20, period=14)
                 if rsi_1w is not None:
                     if rsi_1w > 70:
@@ -71,7 +65,6 @@ def start_alert_monitor(interval_minutes=10):
                     elif rsi_1w < 30:
                         alerts.append(f"RSI 1Semana = {rsi_1w} (sobreventa <30)")
 
-                # --- RSI 1 Mes (>70 o <30) ---
                 rsi_1M = _get_rsi(sym, "1M", limit=20, period=14)
                 if rsi_1M is not None:
                     if rsi_1M > 70:
@@ -79,13 +72,12 @@ def start_alert_monitor(interval_minutes=10):
                     elif rsi_1M < 30:
                         alerts.append(f"RSI 1Mes = {rsi_1M} (sobreventa <30)")
 
-                # --- SMA 9 en 4H, 1D, 1S, 1M (precio toca la SMA) ---
                 for interval, label in [("4h", "4H"), ("1d", "1D"), ("1w", "1Sem"), ("1M", "1Mes")]:
                     sma_val, close_val = _get_sma(sym, interval, limit=30, period=9)
                     if sma_val is not None and close_val is not None:
                         if sma_val > 0:
                             diff_pct = abs(close_val - sma_val) / sma_val
-                            if diff_pct < 0.005:  # menos del 0.5%
+                            if diff_pct < 0.005:
                                 if close_val >= sma_val:
                                     alerts.append(f"Precio tocó SMA9 {label} (${sma_val:.6f}) al alza")
                                 else:
@@ -100,6 +92,20 @@ def start_alert_monitor(interval_minutes=10):
                         pass
 
                 time.sleep(0.3)
+
+            # --- Recordatorios de tareas próximas ---
+            upcoming = get_upcoming_tasks(hours=24)
+            if upcoming:
+                task_lines = []
+                for task in upcoming:
+                    deadline = task.get("deadline", "sin fecha")
+                    task_lines.append(f"• {task['title']} (vencimiento: {deadline})")
+                reminder = "📋 **Recordatorio de tareas**:\n" + "\n".join(task_lines)
+                try:
+                    with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                        f.write(reminder)
+                except Exception:
+                    pass
 
             time.sleep(interval_minutes * 60)
 

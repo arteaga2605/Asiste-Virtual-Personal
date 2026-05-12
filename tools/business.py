@@ -48,10 +48,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Inicializar al importar
 init_db()
 
-# ---------- NOTAS (ya existentes) ----------
+# ---------- NOTAS ----------
 def add_note(title: str, content: str) -> dict:
     conn = get_connection()
     conn.execute("INSERT INTO notes (title, content) VALUES (?, ?)", (title, content))
@@ -65,7 +64,7 @@ def list_notes() -> list:
     conn.close()
     return [dict(row) for row in rows]
 
-# ---------- TAREAS (ya existentes) ----------
+# ---------- TAREAS ----------
 def add_task(title: str, description: str = "", priority: str = "medium", deadline: str = "") -> dict:
     conn = get_connection()
     conn.execute("INSERT INTO tasks (title, description, priority, deadline) VALUES (?, ?, ?, ?)",
@@ -87,7 +86,21 @@ def update_task_status(task_id: int, new_status: str) -> dict:
     conn.close()
     return {"status": "ok"}
 
-# ---------- CONTACTOS (ya existentes) ----------
+def get_upcoming_tasks(hours: int = 24) -> list:
+    """Devuelve las tareas pendientes cuyo deadline está dentro de las próximas 'hours' horas."""
+    now = datetime.now()
+    future = now + timedelta(hours=hours)
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    future_str = future.strftime("%Y-%m-%d %H:%M")
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE status = 'pending' AND deadline BETWEEN ? AND ? ORDER BY deadline",
+        (now_str, future_str)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+# ---------- CONTACTOS ----------
 def add_contact(name: str, company: str = "", role: str = "", email: str = "", phone: str = "", notes: str = "") -> dict:
     conn = get_connection()
     conn.execute("INSERT INTO contacts (name, company, role, email, phone, notes) VALUES (?, ?, ?, ?, ?, ?)",
@@ -102,9 +115,8 @@ def list_contacts() -> list:
     conn.close()
     return [dict(row) for row in rows]
 
-# ---------- NUEVAS FUNCIONES DE METAS ----------
+# ---------- METAS ----------
 def add_goal(description: str, target_value: float = 100, unit: str = "%") -> dict:
-    """Añade una nueva meta al sistema."""
     conn = get_connection()
     conn.execute(
         "INSERT INTO goals (description, target_value, unit) VALUES (?, ?, ?)",
@@ -115,7 +127,6 @@ def add_goal(description: str, target_value: float = 100, unit: str = "%") -> di
     return {"status": "ok", "action": "add_goal"}
 
 def list_goals(active_only: bool = True) -> list:
-    """Lista las metas. Si active_only es True, solo muestra las activas (active=1)."""
     conn = get_connection()
     if active_only:
         rows = conn.execute("SELECT * FROM goals WHERE active = 1 ORDER BY created_at DESC").fetchall()
@@ -125,7 +136,6 @@ def list_goals(active_only: bool = True) -> list:
     return [dict(row) for row in rows]
 
 def update_goal_progress(goal_id: int, current_value: float) -> dict:
-    """Actualiza el valor actual de una meta."""
     conn = get_connection()
     conn.execute("UPDATE goals SET current_value = ? WHERE id = ?", (current_value, goal_id))
     conn.commit()
@@ -133,44 +143,31 @@ def update_goal_progress(goal_id: int, current_value: float) -> dict:
     return {"status": "ok"}
 
 def deactivate_goal(goal_id: int) -> dict:
-    """Marca una meta como inactiva."""
     conn = get_connection()
     conn.execute("UPDATE goals SET active = 0 WHERE id = ?", (goal_id,))
     conn.commit()
     conn.close()
     return {"status": "ok"}
 
-# ---------- GENERACIÓN DE INFORMES SEMANALES ----------
+# ---------- INFORME SEMANAL ----------
 def generate_weekly_report() -> str:
-    """
-    Genera un resumen de los últimos 7 días:
-    - Tareas completadas
-    - Nuevas notas
-    - Metas actuales y progreso
-    - Rendimiento del asistente (número de predicciones y aciertos deportivas)
-    """
     now = datetime.now()
     since = now - timedelta(days=7)
     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
 
     conn = get_connection()
-    # Tareas completadas (status = 'done')
     tasks_done = conn.execute(
         "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND created_at >= ?",
         (since_str,)
     ).fetchone()["cnt"]
 
-    # Nuevas notas
     new_notes = conn.execute(
         "SELECT COUNT(*) as cnt FROM notes WHERE created_at >= ?",
         (since_str,)
     ).fetchone()["cnt"]
 
-    # Metas activas
     goals = conn.execute("SELECT * FROM goals WHERE active = 1").fetchall()
 
-    # Interacciones con el asistente (desde la tabla conversation_history, si existe)
-    # Puede que no exista si nunca se ha creado, pero memory.py la crea.
     try:
         interactions = conn.execute(
             "SELECT COUNT(*) as cnt FROM conversation_history WHERE timestamp >= ?",
@@ -179,20 +176,17 @@ def generate_weekly_report() -> str:
     except:
         interactions = 0
 
-    # Predicciones deportivas (aciertos/fallos) recientes
     from tools.predictions import get_all_predictions
     predictions = get_all_predictions()
-    recent_preds = [p for p in predictions if p["timestamp"] >= since_str]
-    total_preds = len(recent_preds)
+    total_preds = len(predictions)
     aciertos = 0
-    for pred in predictions:  # para rendimiento global, no solo esta semana
+    for pred in predictions:
         event_id = pred["event_id"]
         from tools.sports import get_event_result
         result = get_event_result(pred["sport"], pred["league_slug"], event_id)
         if result and result.get("winner"):
             if pred["favorite"].lower() == result["winner"].lower():
                 aciertos += 1
-    total_preds_all = len(predictions)
 
     conn.close()
 
@@ -211,8 +205,8 @@ def generate_weekly_report() -> str:
 
     lines.append("\n📊 **Rendimiento del asistente**:")
     lines.append(f"  Conversaciones esta semana: {interactions} interacciones")
-    if total_preds_all > 0:
-        lines.append(f"  Predicciones deportivas totales: {total_preds_all} (aciertos: {aciertos})")
+    if total_preds > 0:
+        lines.append(f"  Predicciones deportivas totales: {total_preds} (aciertos: {aciertos})")
     else:
         lines.append("  Aún no hay predicciones deportivas registradas.")
 

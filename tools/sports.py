@@ -5,26 +5,26 @@ from datetime import datetime, timezone
 
 SPORTS_CONFIG = [
     # Grandes ligas de EE.UU.
-    {"sport": "basketball", "league": "nba",     "name": "NBA"},
-    {"sport": "football",   "league": "nfl",     "name": "NFL"},
-    {"sport": "baseball",   "league": "mlb",     "name": "MLB"},
-    {"sport": "hockey",     "league": "nhl",     "name": "NHL"},
+    {"sport": "basketball", "league": "nba",     "name": "NBA",      "category": "basketball"},
+    {"sport": "football",   "league": "nfl",     "name": "NFL",      "category": "football"},
+    {"sport": "baseball",   "league": "mlb",     "name": "MLB",      "category": "baseball"},
+    {"sport": "hockey",     "league": "nhl",     "name": "NHL",      "category": "hockey"},
     # Fútbol masculino europeo
-    {"sport": "soccer",     "league": "eng.1",   "name": "Premier League"},
-    {"sport": "soccer",     "league": "esp.1",   "name": "La Liga"},
-    {"sport": "soccer",     "league": "ger.1",   "name": "Bundesliga"},
-    {"sport": "soccer",     "league": "ita.1",   "name": "Serie A"},
-    {"sport": "soccer",     "league": "fra.1",   "name": "Ligue 1"},
-    {"sport": "soccer",     "league": "ned.1",   "name": "Eredivisie"},
-    {"sport": "soccer",     "league": "sco.1",   "name": "Scottish Premiership"},
+    {"sport": "soccer",     "league": "eng.1",   "name": "Premier League",       "category": "soccer"},
+    {"sport": "soccer",     "league": "esp.1",   "name": "La Liga",              "category": "soccer"},
+    {"sport": "soccer",     "league": "ger.1",   "name": "Bundesliga",           "category": "soccer"},
+    {"sport": "soccer",     "league": "ita.1",   "name": "Serie A",              "category": "soccer"},
+    {"sport": "soccer",     "league": "fra.1",   "name": "Ligue 1",              "category": "soccer"},
+    {"sport": "soccer",     "league": "ned.1",   "name": "Eredivisie",           "category": "soccer"},
+    {"sport": "soccer",     "league": "sco.1",   "name": "Scottish Premiership", "category": "soccer"},
     # Fútbol americano e internacional
-    {"sport": "soccer",     "league": "usa.1",   "name": "MLS"},
-    {"sport": "soccer",     "league": "mex.1",   "name": "Liga MX"},
+    {"sport": "soccer",     "league": "usa.1",   "name": "MLS",                  "category": "soccer"},
+    {"sport": "soccer",     "league": "mex.1",   "name": "Liga MX",              "category": "soccer"},
     # Fútbol de otras regiones
-    {"sport": "soccer",     "league": "ksa.1",   "name": "Saudi Pro League"},
+    {"sport": "soccer",     "league": "ksa.1",   "name": "Saudi Pro League",     "category": "soccer"},
     # Fútbol femenino
-    {"sport": "soccer",     "league": "esp.w.1", "name": "Spanish Liga F"},
-    {"sport": "soccer",     "league": "aus.w.1", "name": "A-League Women"},
+    {"sport": "soccer",     "league": "esp.w.1", "name": "Spanish Liga F",       "category": "soccer"},
+    {"sport": "soccer",     "league": "aus.w.1", "name": "A-League Women",       "category": "soccer"},
 ]
 
 ACTIVE_STATUSES = {
@@ -40,16 +40,23 @@ BASE_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{le
 BASE_EVENT_URL = "https://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/events/{event_id}/competitions/{event_id}"
 SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
 
+_espn_available = True
+
+def is_espn_available() -> bool:
+    return _espn_available
 
 def get_today_scoreboard(sport: str, league: str) -> list:
+    global _espn_available
     url = BASE_SCOREBOARD_URL.format(sport=sport, league=league)
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
+        _espn_available = True
         return data.get("events", [])
     except Exception as e:
         print(f"Error obteniendo scoreboard {sport}/{league}: {e}")
+        _espn_available = False
         return []
 
 
@@ -139,10 +146,13 @@ def enrich_games_with_stats(games: list) -> list:
     return games
 
 
-def fetch_sports_data() -> tuple[list, dict]:
+def fetch_sports_data(category_filter: str = None) -> tuple[list, dict]:
     all_games = []
     events_meta = {}
-    for config in SPORTS_CONFIG:
+    configs = SPORTS_CONFIG
+    if category_filter:
+        configs = [c for c in SPORTS_CONFIG if c.get("category") == category_filter]
+    for config in configs:
         events = get_today_scoreboard(config["sport"], config["league"])
         for event in events:
             if not _event_is_active(event):
@@ -190,10 +200,7 @@ def fetch_sports_data() -> tuple[list, dict]:
                     "league_slug": config["league"],
                 }
     today_games = [g for g in all_games if g["is_today"]]
-    future_games = sorted(
-        [g for g in all_games if not g["is_today"]],
-        key=lambda g: g["start_time"]
-    )
+    future_games = sorted([g for g in all_games if not g["is_today"]], key=lambda g: g["start_time"])
     selected = today_games + future_games
     selected = selected[:5]
     selected = enrich_games_with_stats(selected)
@@ -220,7 +227,9 @@ def build_sports_prompt(games_data: list) -> str:
     prompt += (
         "⚠️ IMPORTANTE: Devuelve tu respuesta **exclusivamente** en formato JSON, "
         "sin texto adicional fuera del JSON. El JSON debe tener la siguiente estructura:\n"
-        '{"predictions": [{"game": "nombre del partido o resumen", "favorite": "nombre del equipo favorito", "score": "marcador estimado (ej. 3-2)"}]}\n'
+        '{"predictions": [{"game": "RESUMEN_EXACTO_DEL_PARTIDO", "favorite": "nombre del equipo favorito", "score": "marcador estimado (ej. 3-2)"}]}\n'
+        "Para el campo 'game' debes usar **exactamente** el resumen (RESUMEN) que se muestra debajo del nombre de la liga, "
+        "sin añadir ni quitar nada. Por ejemplo, si ves 'RESUMEN: LEV vs OSA', tu JSON llevará \"game\": \"LEV vs OSA\".\n"
         "No uses herramientas ni funciones. Responde solo con el JSON.\n\n"
     )
 
@@ -233,6 +242,7 @@ def build_sports_prompt(games_data: list) -> str:
         teams_line = " vs ".join(team_names)
 
         prompt += f"**{game['league']}** ({when}): {teams_line} - {game.get('start_time', '')}\n"
+        prompt += f"RESUMEN: {game['summary']}\n"   # <-- Identificador exacto que debe usar el modelo
         prompt += f"Estado: {game['status']}\n"
         for team in game["teams"]:
             record = f" ({team['record']})" if team.get("record") else ""
@@ -248,15 +258,11 @@ def build_sports_prompt(games_data: list) -> str:
                     prompt += f"  {team_name}: {stat_str}\n"
         prompt += "\n"
 
-    prompt += "Proporciona el JSON con las predicciones para estos partidos."
+    prompt += "Proporciona el JSON con las predicciones para estos partidos. Recuerda usar exactamente el RESUMEN proporcionado para cada partido."
     return prompt
 
 
 def get_event_result(sport: str, league: str, event_id: str) -> dict | None:
-    """
-    Obtiene el resultado final de un evento.
-    Ahora se basa en el campo 'completed' del summary y extrae el ganador de forma robusta.
-    """
     summary_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
     try:
         resp = requests.get(summary_url, timeout=10)
@@ -266,7 +272,6 @@ def get_event_result(sport: str, league: str, event_id: str) -> dict | None:
         print(f"Error obteniendo summary para resultado de {event_id}: {e}")
         return None
 
-    # Obtener la competición principal
     header = data.get("header", {})
     competitions = header.get("competitions", [])
     if not competitions:
@@ -276,25 +281,19 @@ def get_event_result(sport: str, league: str, event_id: str) -> dict | None:
 
     comp = competitions[0]
     status_info = comp.get("status", {})
-    # Comprobar si el evento está completado usando el booleano 'completed'
     completed = status_info.get("type", {}).get("completed", False)
     if not completed:
-        # También podemos revisar el nombre del estado por si acaso
         status_name = status_info.get("type", {}).get("name", "").upper()
         if "FINAL" not in status_name and "FULL_TIME" not in status_name and "COMPLETE" not in status_name:
-            return None  # No finalizado
+            return None
 
-    # Extraer los competidores
     competitors = comp.get("competitors", [])
     winner = None
-
-    # Buscar el ganador explícito
     for c in competitors:
         if c.get("winner"):
             winner = c.get("team", {}).get("displayName")
             break
 
-    # Si no hay ganador explícito, decidir por marcador
     if not winner and len(competitors) == 2:
         scores = []
         for c in competitors:

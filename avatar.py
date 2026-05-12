@@ -5,18 +5,20 @@ import struct
 import random
 import socket
 import threading
+import json
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
     QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
-from config import AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE, COMMUNICATION_PORT
+from config import AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE, COMMUNICATION_PORT, STATUS_CHECK_INTERVAL
 
 
 class FloatingAvatar(QWidget):
     response_ready = pyqtSignal(str)
     thinking_changed = pyqtSignal(bool)
+    status_updated = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -33,7 +35,7 @@ class FloatingAvatar(QWidget):
         self.avatar_height_body = 180
         self.chat_area_width = 320
         self.total_width = self.avatar_width + self.chat_area_width
-        self.total_height = 350
+        self.total_height = 380
         self.setFixedSize(self.total_width, self.total_height)
 
         self.use_custom_image = False
@@ -46,9 +48,32 @@ class FloatingAvatar(QWidget):
         else:
             self.pixmap = None
 
+        # Panel de estado
+        self.status_panel = QWidget(self)
+        self.status_panel.setGeometry(self.avatar_width, 0, self.chat_area_width - 20, 25)
+        self.status_panel.setStyleSheet("background: transparent;")
+        status_layout = QHBoxLayout(self.status_panel)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(15)
+        status_layout.addStretch()
+
+        self.status_binance = QLabel("⬤")
+        self.status_binance.setToolTip("Binance WebSocket")
+        self.status_espn = QLabel("⬤")
+        self.status_espn.setToolTip("ESPN API")
+        self.status_ollama = QLabel("⬤")
+        self.status_ollama.setToolTip("Ollama")
+        for lbl in (self.status_binance, self.status_espn, self.status_ollama):
+            lbl.setFont(QFont("Segoe UI", 12))
+            lbl.setStyleSheet("color: gray;")
+            status_layout.addWidget(lbl)
+        status_layout.addStretch()
+
+        self.status_updated.connect(self._update_status_indicators)
+
         # Zona de chat
         self.chat_widget = QWidget(self)
-        self.chat_widget.setGeometry(self.avatar_width, 10, self.chat_area_width - 20, self.total_height - 20)
+        self.chat_widget.setGeometry(self.avatar_width, 30, self.chat_area_width - 20, self.total_height - 40)
         self.chat_widget.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(self.chat_widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -148,14 +173,46 @@ class FloatingAvatar(QWidget):
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
 
-        # Timer para leer alertas automáticas
+        # Timer para alertas automáticas
         self.alert_timer = QTimer(self)
         self.alert_timer.timeout.connect(self.check_auto_alerts)
         self.alert_timer.start(10000)
         self.last_alert_msg = ""
 
+        # Timer para estado de conexiones
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.request_status)
+        self.status_timer.start(STATUS_CHECK_INTERVAL * 1000)
+        self.request_status()
+
         self.show()
         self.raise_()
+
+    def request_status(self):
+        def _ask():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect(("localhost", COMMUNICATION_PORT))
+                msg = "__STATUS__"
+                sock.sendall(struct.pack("!I", len(msg)) + msg.encode("utf-8"))
+                raw_len = sock.recv(4)
+                if len(raw_len) == 4:
+                    (resp_len,) = struct.unpack("!I", raw_len)
+                    data = sock.recv(resp_len).decode("utf-8")
+                    status = json.loads(data)
+                    self.status_updated.emit(status)
+                sock.close()
+            except Exception:
+                self.status_updated.emit({"ollama": False, "binance": False, "espn": False})
+        threading.Thread(target=_ask, daemon=True).start()
+
+    def _update_status_indicators(self, status):
+        def color(ok):
+            return "green" if ok else "red"
+        self.status_binance.setStyleSheet(f"color: {color(status.get('binance', False))};")
+        self.status_espn.setStyleSheet(f"color: {color(status.get('espn', False))};")
+        self.status_ollama.setStyleSheet(f"color: {color(status.get('ollama', False))};")
 
     def check_auto_alerts(self):
         try:
@@ -164,7 +221,7 @@ class FloatingAvatar(QWidget):
                     msg = f.read().strip()
                 if msg and msg != self.last_alert_msg:
                     self.last_alert_msg = msg
-                    self.response_bubble.setPlainText(f"🔔 **Alerta automática:**\n{msg}")
+                    self.response_bubble.setPlainText(f"🔔 **Alerta:**\n{msg}")
                     self.response_scroll.show()
                     os.remove(ALERT_FILE)
         except Exception:
@@ -329,12 +386,23 @@ class FloatingAvatar(QWidget):
             menu.addAction("🛑 No caminar").triggered.connect(self.toggle_movement)
         else:
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
+        menu.addAction("₿ Bitcoin").triggered.connect(self.show_bitcoin_analysis)  # ← NUEVO
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
-        menu.addAction("🏈 Deporte").triggered.connect(self.show_sports_analysis)
+
+        # Submenú Deporte
+        sports_menu = QMenu("🏈 Deporte", self)
+        sports_menu.addAction("Todos los deportes").triggered.connect(lambda: self.show_sports_analysis(None))
+        sports_menu.addAction("Solo fútbol").triggered.connect(lambda: self.show_sports_analysis("soccer"))
+        sports_menu.addAction("Solo baloncesto (NBA)").triggered.connect(lambda: self.show_sports_analysis("basketball"))
+        sports_menu.addAction("Solo fútbol americano (NFL)").triggered.connect(lambda: self.show_sports_analysis("football"))
+        sports_menu.addAction("Solo béisbol (MLB)").triggered.connect(lambda: self.show_sports_analysis("baseball"))
+        sports_menu.addAction("Solo hockey (NHL)").triggered.connect(lambda: self.show_sports_analysis("hockey"))
+        menu.addMenu(sports_menu)
+
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
-        menu.addAction("🎯 Metas").triggered.connect(self.show_goals)            # nuevo
-        menu.addAction("📄 Informe Semanal").triggered.connect(self.show_weekly) # nuevo
+        menu.addAction("🎯 Metas").triggered.connect(self.show_goals)
+        menu.addAction("📄 Informe Semanal").triggered.connect(self.show_weekly)
         menu.addSeparator()
         menu.addAction("📜 Historial").triggered.connect(self.show_history)
         menu.addAction("👻 Ocultar avatar").triggered.connect(self.hide_to_tray)
@@ -350,10 +418,18 @@ class FloatingAvatar(QWidget):
             self.move_timer.stop()
             self.target_pos = None
 
+    def show_bitcoin_analysis(self):          # ← NUEVO
+        self.start_query("__BTC__")
+
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
-    def show_sports_analysis(self):
-        self.start_query("__SPORTS__")
+
+    def show_sports_analysis(self, category=None):
+        if category:
+            self.start_query(f"__SPORTS__:{category}")
+        else:
+            self.start_query("__SPORTS__")
+
     def show_report(self):
         self.start_query("__REPORT__")
     def show_history(self):
@@ -386,13 +462,13 @@ class FloatingAvatar(QWidget):
         self.response_scroll.hide()
 
     def adjust_window_height(self, bubble_height):
-        base_height = 350
+        base_height = 380
         extra_space = max(0, bubble_height - 200)
         new_total_height = base_height + extra_space
         self.setFixedSize(self.total_width, new_total_height)
         self.chat_widget.setGeometry(
-            self.avatar_width, 10,
-            self.chat_area_width - 20, new_total_height - 20
+            self.avatar_width, 30,
+            self.chat_area_width - 20, new_total_height - 40
         )
 
     def mousePressEvent(self, event):
