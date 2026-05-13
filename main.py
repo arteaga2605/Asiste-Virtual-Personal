@@ -5,7 +5,6 @@ import socket
 import threading
 import json
 import time
-import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 from config import (
@@ -15,7 +14,7 @@ from config import (
 )
 from tools.trading import (
     start_binance_stream, fetch_live_prices_for_news, build_news_prompt,
-    SELECTED_CRYPTO, is_binance_stream_active, build_bitcoin_analysis_prompt, get_current_btc_price
+    SELECTED_CRYPTO, is_binance_stream_active, build_crypto_analysis_prompt, get_current_crypto_price
 )
 from tools.memory import load_recent_history, save_message
 from agent import process_user_message
@@ -42,15 +41,16 @@ SYSTEM_PROMPT_SPORTS = (
     "Eres un analista deportivo experto. Recibes datos de partidos del día (ligas, equipos, "
     "cuotas, estadísticas avanzadas) y debes devolver exclusivamente un JSON con tus predicciones, "
     "sin texto adicional. El formato debe ser: "
-    '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", "score": "marcador estimado"}]}.'
+    '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", '
+    '"score": "marcador estimado", "confidence": número entre 0 y 100}]}.'
     "Usa exactamente el RESUMEN que aparece en cada partido para el campo 'game'. "
     "**No devuelvas nunca una lista vacía**; debes hacer una predicción para cada partido."
 )
 
-SYSTEM_PROMPT_BTC = (
-    "Eres un analista técnico experto en Bitcoin. Recibes datos detallados de BTC (precio, RSI, ATR, "
-    "soportes, resistencias, Fibonacci, patrones de velas) y debes devolver exclusivamente un JSON con tu predicción. "
-    "No añadas texto fuera del JSON. Responde solo con el JSON solicitado."
+SYSTEM_PROMPT_CRYPTO = (
+    "Eres un analista técnico experto en criptomonedas. Recibes datos detallados de una moneda "
+    "(precio, RSI, ATR, soportes, resistencias, Fibonacci, patrones de velas) y debes devolver "
+    "exclusivamente un JSON con tu predicción. No añadas texto fuera del JSON."
 )
 
 # ----- Caché deportivo -----
@@ -92,25 +92,17 @@ def direct_ollama_query(system_prompt: str, user_prompt: str, model: str = OLLAM
 
 
 def _extract_first_json(text: str) -> str | None:
-    """
-    Intenta extraer el primer objeto JSON válido de un texto que puede contener
-    texto adicional antes o después del JSON.
-    """
-    # Buscar la primera llave de apertura
     start = text.find('{')
     if start == -1:
         return None
-    # Buscar la última llave de cierre a partir del inicio
     end = text.rfind('}')
     if end == -1:
         return None
     candidate = text[start:end+1]
-    # Verificar que sea JSON válido
     try:
         json.loads(candidate)
         return candidate
     except:
-        # Si falla, intentamos recortar hasta el último '}' que esté balanceado
         depth = 0
         last_valid_end = -1
         for i in range(start, len(text)):
@@ -132,12 +124,6 @@ def _extract_first_json(text: str) -> str | None:
 
 
 def format_sports_predictions(predictions_json: str, games_data: list = None) -> str:
-    """
-    Convierte la respuesta JSON del modelo en un texto legible.
-    Si el JSON no es válido o la lista está vacía, intenta extraer la información
-    del texto bruto o devuelve el mensaje original.
-    """
-    # Intentar limpiar primero
     clean_json = _extract_first_json(predictions_json)
     if clean_json is None:
         return predictions_json if predictions_json.strip() else "El modelo no devolvió una respuesta válida."
@@ -146,7 +132,7 @@ def format_sports_predictions(predictions_json: str, games_data: list = None) ->
         data = json.loads(clean_json)
         preds = data.get("predictions", [])
         if not preds:
-            return "⚠️ El modelo devolvió un JSON sin predicciones. Respuesta original:\n\n" + predictions_json
+            return "⚠️ El modelo devolvió un JSON sin predicciones."
 
         game_names = {}
         if games_data:
@@ -169,9 +155,11 @@ def format_sports_predictions(predictions_json: str, games_data: list = None) ->
             game_key = pred.get("game", "Partido desconocido")
             fav = pred.get("favorite", "Sin favorito")
             score = pred.get("score", "")
+            confidence = pred.get("confidence", None)
+            conf_str = f" (confianza: {confidence}%)" if confidence is not None else ""
             score_str = f" ({score})" if score else ""
             display_game = game_names.get(game_key, game_key)
-            lines.append(f"{i}. **{display_game}** → Favorito: **{fav}**{score_str}")
+            lines.append(f"{i}. **{display_game}** → Favorito: **{fav}**{score_str}{conf_str}")
         return "\n".join(lines)
     except json.JSONDecodeError:
         return predictions_json
@@ -199,7 +187,7 @@ def handle_client(conn, addr):
 
         history = load_recent_history(HISTORY_LIMIT)
 
-        # ------------------ TRADING (deepseek‑r1:8b) ------------------
+        # ------------------ NOTICIAS (deepseek‑r1:8b) ------------------
         if user_input.startswith("__NEWS__"):
             coins_df = fetch_live_prices_for_news(limit=11)
             news_prompt = build_news_prompt(coins_df)
@@ -208,37 +196,64 @@ def handle_client(conn, addr):
             save_message("assistant", response)
             print(f"Respuesta (noticias): {response[:100]}...")
 
-        elif user_input.startswith("__BTC__"):
-            btc_prompt = build_bitcoin_analysis_prompt()
-            raw_response = direct_ollama_query(SYSTEM_PROMPT_BTC, btc_prompt, model=OLLAMA_TRADING_MODEL)
+        # ------------------ CRIPTO INDIVIDUAL / TODAS ------------------
+        elif user_input.startswith("__CRYPTO__"):
+            parts = user_input.split(":", 1)
+            symbol = parts[1].strip() if len(parts) > 1 else "BTCUSDT"
+            if symbol == "ALL":
+                # Análisis de todas las monedas
+                resultados = []
+                for sym in SELECTED_CRYPTO:
+                    prompt = build_crypto_analysis_prompt(sym)
+                    if prompt.startswith("Error"):
+                        resultados.append(f"❌ {sym}: {prompt}")
+                        continue
+                    raw = direct_ollama_query(SYSTEM_PROMPT_CRYPTO, prompt, model=OLLAMA_TRADING_MODEL)
+                    clean = _extract_first_json(raw)
+                    if clean:
+                        try:
+                            pred_json = json.loads(clean)
+                            direction = pred_json.get("direction", "desconocida")
+                            target = pred_json.get("target_price", "N/D")
+                            reasoning = pred_json.get("reasoning", "")
+                            current_price = get_current_crypto_price(sym)
+                            if current_price and direction in ("bullish", "bearish"):
+                                save_crypto_prediction(sym, direction, target, current_price, raw)
+                            resultados.append(f"**{sym}**: {direction.upper()} → objetivo ${target} ({reasoning[:80]}...)")
+                        except Exception as e:
+                            resultados.append(f"⚠️ {sym}: JSON inválido ({e})")
+                    else:
+                        resultados.append(f"⚠️ {sym}: sin JSON válido")
+                    time.sleep(0.5)
+                response = "₿ **Análisis de todas las criptomonedas**\n\n" + "\n\n".join(resultados)
+            else:
+                # Análisis individual
+                prompt = build_crypto_analysis_prompt(symbol)
+                raw_response = direct_ollama_query(SYSTEM_PROMPT_CRYPTO, prompt, model=OLLAMA_TRADING_MODEL)
+                clean_json = _extract_first_json(raw_response)
+                if clean_json:
+                    try:
+                        pred_json = json.loads(clean_json)
+                        direction = pred_json.get("direction", "").lower()
+                        target_price = float(pred_json.get("target_price", 0))
+                        current_price = get_current_crypto_price(symbol)
+                        if direction in ("bullish", "bearish") and current_price:
+                            save_crypto_prediction(symbol, direction, target_price, current_price, raw_response)
+                    except Exception as e:
+                        print(f"No se pudo guardar la predicción de {symbol}: {e}")
 
-            # Limpiar JSON y guardar predicción
-            clean_json = _extract_first_json(raw_response)
-            if clean_json:
                 try:
-                    pred_json = json.loads(clean_json)
-                    direction = pred_json.get("direction", "").lower()
-                    target_price = float(pred_json.get("target_price", 0))
-                    current_btc = get_current_btc_price()
-                    if direction in ("bullish", "bearish") and current_btc:
-                        save_crypto_prediction(direction, target_price, current_btc, raw_response)
-                        print(f"Predicción BTC guardada: {direction} objetivo {target_price}")
-                except Exception as e:
-                    print(f"No se pudo guardar la predicción BTC: {e}")
+                    pred_json = json.loads(clean_json) if clean_json else json.loads(raw_response)
+                    direction = pred_json.get("direction", "desconocida")
+                    target = pred_json.get("target_price", "N/D")
+                    reasoning = pred_json.get("reasoning", "")
+                    response = f"₿ **Análisis {symbol}**\n\nDirección esperada: **{direction.upper()}**\nPrecio objetivo: ${target}\n\n{reasoning}"
+                except:
+                    response = raw_response
 
-            # Formatear respuesta para mostrar
-            try:
-                pred_json = json.loads(clean_json) if clean_json else json.loads(raw_response)
-                direction = pred_json.get("direction", "desconocida")
-                target = pred_json.get("target_price", "N/D")
-                reasoning = pred_json.get("reasoning", "")
-                response = f"₿ **Análisis Bitcoin**\n\nDirección esperada: **{direction.upper()}**\nPrecio objetivo: ${target}\n\n{reasoning}"
-            except:
-                response = raw_response
-
-            save_message("user", "₿ Análisis Bitcoin")
+            save_message("user", f"₿ Análisis cripto")
             save_message("assistant", response)
-            print(f"Respuesta (Bitcoin): {response[:100]}...")
+            print(f"Respuesta (cripto): {response[:100]}...")
 
         # ------------------ DEPORTES (qwen3:8b) ------------------
         elif user_input.startswith("__SPORTS__"):
@@ -257,7 +272,6 @@ def handle_client(conn, addr):
             sports_prompt = build_sports_prompt(games_data)
             raw_response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt, model=OLLAMA_SPORTS_MODEL)
 
-            # Limpiar JSON para guardar
             clean_json = _extract_first_json(raw_response)
             if clean_json:
                 try:
@@ -278,8 +292,9 @@ def handle_client(conn, addr):
             response = formatted_response
             print(f"Respuesta (deportes): {response[:100]}...")
 
-        # ------------------ RESTO DE OPCIONES (modelo general) ------------------
+        # ------------------ RESTO DE OPCIONES ------------------
         elif user_input.startswith("__REPORT__"):
+            # Reporte deportivo
             all_preds = get_all_predictions()
             if not all_preds:
                 response = "No hay predicciones guardadas aún. Usa primero la opción Deporte."
@@ -334,66 +349,55 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
-            # Reporte Bitcoin
+            # Reporte cripto
             crypto_preds = get_all_crypto_predictions()
-            response += "\n₿ **Predicciones de Bitcoin**\n\n"
+            response += "\n₿ **Predicciones de Criptomonedas**\n\n"
             if not crypto_preds:
-                response += "No hay predicciones de Bitcoin todavía."
+                response += "No hay predicciones de criptomonedas todavía."
             else:
-                btc_aciertos = 0
-                btc_fallos = 0
-                btc_pendientes = 0
-                detalles_btc = []
-
+                cripto_stats = defaultdict(lambda: {"aciertos": 0, "fallos": 0, "pendientes": 0, "detalles": []})
                 now = datetime.now()
                 for cp in crypto_preds:
+                    symbol = cp["symbol"]
+                    if cp["checked"]:
+                        if cp["result"] == "acierto":
+                            cripto_stats[symbol]["aciertos"] += 1
+                        else:
+                            cripto_stats[symbol]["fallos"] += 1
+                        continue
+
                     pred_time_str = cp["timestamp"]
                     try:
                         pred_time = datetime.fromisoformat(pred_time_str)
                     except:
                         pred_time = None
 
-                    if cp["checked"]:
-                        if cp["result"] == "acierto":
-                            btc_aciertos += 1
-                            detalles_btc.append(f"✅ {cp['direction']} → acierto")
-                        else:
-                            btc_fallos += 1
-                            detalles_btc.append(f"❌ {cp['direction']} → fallo")
-                        continue
-
                     if pred_time and (now - pred_time) < timedelta(hours=24):
-                        btc_pendientes += 1
-                        detalles_btc.append(f"⏳ {cp['direction']} (pendiente, predicho {pred_time.strftime('%d/%m %H:%M')})")
+                        cripto_stats[symbol]["pendientes"] += 1
                         continue
 
-                    current_price = get_current_btc_price()
+                    current_price = get_current_crypto_price(symbol)
                     if current_price is None:
-                        btc_pendientes += 1
-                        detalles_btc.append(f"⏳ {cp['direction']} (sin precio actual)")
+                        cripto_stats[symbol]["pendientes"] += 1
                         continue
 
                     predicted_direction = cp["direction"]
                     old_price = cp["current_price"]
                     if predicted_direction == "bullish" and current_price > old_price:
                         update_crypto_prediction_result(cp["id"], "acierto")
-                        btc_aciertos += 1
-                        detalles_btc.append(f"✅ {cp['direction']} (subió de ${old_price:.2f} a ${current_price:.2f})")
+                        cripto_stats[symbol]["aciertos"] += 1
                     elif predicted_direction == "bearish" and current_price < old_price:
                         update_crypto_prediction_result(cp["id"], "acierto")
-                        btc_aciertos += 1
-                        detalles_btc.append(f"✅ {cp['direction']} (bajó de ${old_price:.2f} a ${current_price:.2f})")
+                        cripto_stats[symbol]["aciertos"] += 1
                     else:
                         update_crypto_prediction_result(cp["id"], "fallo")
-                        btc_fallos += 1
-                        detalles_btc.append(f"❌ {cp['direction']} (precio ahora ${current_price:.2f})")
+                        cripto_stats[symbol]["fallos"] += 1
 
-                response += f"🔹 **Total Bitcoin**: {btc_aciertos} aciertos, {btc_fallos} fallos"
-                if btc_pendientes > 0:
-                    response += f", {btc_pendientes} pendientes"
-                response += "\n"
-                for det in detalles_btc:
-                    response += f"  {det}\n"
+                for symbol, stats in sorted(cripto_stats.items()):
+                    response += f"**{symbol}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
+                    if stats['pendientes'] > 0:
+                        response += f", {stats['pendientes']} pendientes"
+                    response += "\n"
 
         elif user_input.startswith("__GOALS__"):
             goals = list_goals(active_only=True)

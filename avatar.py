@@ -8,11 +8,68 @@ import threading
 import json
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon, QSizePolicy
+    QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon, QSizePolicy,
+    QDialog, QVBoxLayout as QV, QPushButton
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
-from config import AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE, COMMUNICATION_PORT, STATUS_CHECK_INTERVAL
+from config import (
+    AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE,
+    COMMUNICATION_PORT, STATUS_CHECK_INTERVAL
+)
+from tools.trading import SELECTED_CRYPTO
+
+
+class ToastNotification(QWidget):
+    """Notificación emergente que aparece en la esquina inferior derecha y se desvanece."""
+    def __init__(self, message, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint |
+            Qt.WindowStaysOnTopHint |
+            Qt.Tool |
+            Qt.SubWindow
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        label = QLabel(message)
+        label.setStyleSheet("""
+            background-color: #333;
+            color: white;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 14px;
+        """)
+        label.setWordWrap(True)
+        layout = QV(self)
+        layout.addWidget(label)
+        self.setLayout(layout)
+
+        self.adjustSize()
+        # Posicionar en la esquina inferior derecha
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 20)
+
+        # Animación de opacidad
+        self.opacity_effect = self.setWindowOpacity(0.0)
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(300)
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(0.9)
+        self.animation.finished.connect(self.start_timer)
+        self.animation.start()
+
+    def start_timer(self):
+        QTimer.singleShot(5000, self.fade_out)
+
+    def fade_out(self):
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(500)
+        self.animation.setStartValue(0.9)
+        self.animation.setEndValue(0.0)
+        self.animation.finished.connect(self.close)
+        self.animation.start()
 
 
 class FloatingAvatar(QWidget):
@@ -31,12 +88,9 @@ class FloatingAvatar(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
-        # Tamaño mínimo para evitar colapsos
         self.setMinimumSize(400, 300)
-
         self.avatar_width = 150
         self.chat_area_width = 320
-        # Dimensiones iniciales
         self.resize(self.avatar_width + self.chat_area_width, 380)
 
         self.use_custom_image = False
@@ -49,7 +103,7 @@ class FloatingAvatar(QWidget):
         else:
             self.pixmap = None
 
-        # ---- Panel de estado ----
+        # Panel de estado
         self.status_panel = QWidget(self)
         self.status_panel.setStyleSheet("background: transparent;")
         status_layout = QHBoxLayout(self.status_panel)
@@ -71,14 +125,14 @@ class FloatingAvatar(QWidget):
 
         self.status_updated.connect(self._update_status_indicators)
 
-        # ---- Zona de chat ----
+        # Zona de chat
         self.chat_widget = QWidget(self)
         self.chat_widget.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(self.chat_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Burbuja de respuesta (sin altura máxima fija, crece con la ventana)
+        # Burbuja de respuesta
         self.response_scroll = QScrollArea()
         self.response_scroll.setWidgetResizable(True)
         self.response_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
@@ -176,7 +230,7 @@ class FloatingAvatar(QWidget):
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
 
-        # Timer para alertas automáticas
+        # Timer para alertas → ahora muestra toast
         self.alert_timer = QTimer(self)
         self.alert_timer.timeout.connect(self.check_auto_alerts)
         self.alert_timer.start(10000)
@@ -190,18 +244,15 @@ class FloatingAvatar(QWidget):
 
         self.show()
         self.raise_()
-        self.update_geometry()  # Posiciona los widgets internos
+        self.update_geometry()
 
     # ------------------------------------------------------------
     # Redimensionamiento manual
     # ------------------------------------------------------------
     def update_geometry(self):
-        """Reubica y redimensiona los widgets internos según el tamaño de la ventana."""
         w = self.width()
         h = self.height()
-        # Panel de estado en la parte superior derecha
         self.status_panel.setGeometry(self.avatar_width, 5, w - self.avatar_width - 10, 25)
-        # Área de chat
         self.chat_widget.setGeometry(self.avatar_width, 35, w - self.avatar_width - 15, h - 45)
 
     def resizeEvent(self, event):
@@ -218,7 +269,6 @@ class FloatingAvatar(QWidget):
                 self.resize_start_geom = self.geometry()
                 event.accept()
                 return
-            # Si no, iniciar arrastre
             self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
             event.accept()
 
@@ -234,7 +284,6 @@ class FloatingAvatar(QWidget):
                 new_geom.setBottom(new_geom.bottom() + delta.y())
             if 'n' in self.resize_edge:
                 new_geom.setTop(new_geom.top() + delta.y())
-            # Aplicar tamaño mínimo
             if new_geom.width() < self.minimumWidth():
                 new_geom.setWidth(self.minimumWidth())
             if new_geom.height() < self.minimumHeight():
@@ -246,7 +295,6 @@ class FloatingAvatar(QWidget):
             self.move(event.globalPos() - self.drag_pos)
             event.accept()
         else:
-            # Cambiar cursor al pasar por bordes
             edge = self._detect_edge(event.pos())
             if edge == 'nw' or edge == 'se':
                 self.setCursor(Qt.SizeFDiagCursor)
@@ -268,7 +316,6 @@ class FloatingAvatar(QWidget):
         super().mouseReleaseEvent(event)
 
     def _detect_edge(self, pos):
-        """Devuelve una cadena con las direcciones de borde ('n','s','e','w') si el cursor está cerca del borde."""
         margin = 8
         w, h = self.width(), self.height()
         x, y = pos.x(), pos.y()
@@ -284,7 +331,23 @@ class FloatingAvatar(QWidget):
         return edges if edges else None
 
     # ------------------------------------------------------------
-    # Resto de funcionalidades (sin cambios significativos)
+    # Toast de alertas
+    # ------------------------------------------------------------
+    def check_auto_alerts(self):
+        try:
+            if os.path.exists(ALERT_FILE):
+                with open(ALERT_FILE, "r", encoding="utf-8") as f:
+                    msg = f.read().strip()
+                if msg and msg != self.last_alert_msg:
+                    self.last_alert_msg = msg
+                    toast = ToastNotification(f"🔔 {msg}")
+                    toast.show()
+                    os.remove(ALERT_FILE)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # Resto de funcionalidades
     # ------------------------------------------------------------
     def request_status(self):
         def _ask():
@@ -311,19 +374,6 @@ class FloatingAvatar(QWidget):
         self.status_binance.setStyleSheet(f"color: {color(status.get('binance', False))};")
         self.status_espn.setStyleSheet(f"color: {color(status.get('espn', False))};")
         self.status_ollama.setStyleSheet(f"color: {color(status.get('ollama', False))};")
-
-    def check_auto_alerts(self):
-        try:
-            if os.path.exists(ALERT_FILE):
-                with open(ALERT_FILE, "r", encoding="utf-8") as f:
-                    msg = f.read().strip()
-                if msg and msg != self.last_alert_msg:
-                    self.last_alert_msg = msg
-                    self.response_bubble.setPlainText(f"🔔 **Alerta:**\n{msg}")
-                    self.response_scroll.show()
-                    os.remove(ALERT_FILE)
-        except Exception:
-            pass
 
     def eventFilter(self, obj, event):
         if obj == self.input_field:
@@ -484,7 +534,17 @@ class FloatingAvatar(QWidget):
             menu.addAction("🛑 No caminar").triggered.connect(self.toggle_movement)
         else:
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
-        menu.addAction("₿ Bitcoin").triggered.connect(self.show_bitcoin_analysis)
+
+        # Submenú Criptomonedas
+        crypto_menu = QMenu("₿ Criptomonedas", self)
+        for sym in SELECTED_CRYPTO:
+            # Nombre bonito
+            name = sym.replace("USDT", "")
+            crypto_menu.addAction(f"₿ {name}").triggered.connect(lambda checked, s=sym: self.show_crypto_analysis(s))
+        crypto_menu.addSeparator()
+        crypto_menu.addAction("📊 Todas las criptos").triggered.connect(lambda: self.show_crypto_analysis("ALL"))
+        menu.addMenu(crypto_menu)
+
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
 
         sports_menu = QMenu("🏈 Deporte", self)
@@ -515,15 +575,18 @@ class FloatingAvatar(QWidget):
             self.move_timer.stop()
             self.target_pos = None
 
-    def show_bitcoin_analysis(self):
-        self.start_query("__BTC__")
+    def show_crypto_analysis(self, symbol):
+        self.start_query(f"__CRYPTO__:{symbol}")
+
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
+
     def show_sports_analysis(self, category=None):
         if category:
             self.start_query(f"__SPORTS__:{category}")
         else:
             self.start_query("__SPORTS__")
+
     def show_report(self):
         self.start_query("__REPORT__")
     def show_history(self):
@@ -546,7 +609,6 @@ class FloatingAvatar(QWidget):
             self.show_from_tray()
 
     def expand_bubble(self):
-        # Aumenta el tamaño de la ventana 100 px en altura
         new_h = self.height() + 100
         self.resize(self.width(), new_h)
         self.update_geometry()

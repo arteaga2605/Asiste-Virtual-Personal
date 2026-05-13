@@ -217,7 +217,8 @@ def build_sports_prompt(games_data: list) -> str:
 
     prompt = (
         "Eres un analista deportivo experto. Analiza los siguientes partidos "
-        "y sugiere los equipos con mayores probabilidades de ganar, **incluyendo el marcador estimado**.\n"
+        "y sugiere los equipos con mayores probabilidades de ganar, **incluyendo el marcador estimado "
+        "y un intervalo de confianza (porcentaje)**.\n"
     )
     if today_candidates:
         prompt += f"Partidos de hoy ({len(today_candidates)}):\n"
@@ -228,8 +229,10 @@ def build_sports_prompt(games_data: list) -> str:
         "⚠️ **INSTRUCCIÓN ESTRICTA**: Debes devolver **exactamente** un JSON válido y nada más. "
         "La lista 'predictions' debe tener **un elemento por cada partido**, nunca vacía. "
         "El formato debe ser:\n"
-        '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", "score": "marcador estimado (ej. 3-2)"}]}\n'
-        "Por ejemplo: {\"predictions\": [{\"game\": \"LEV vs OSA\", \"favorite\": \"Levante UD\", \"score\": \"2-1\"}]}\n"
+        '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", '
+        '"score": "marcador estimado (ej. 3-2)", "confidence": número entre 0 y 100}]}\n'
+        "Por ejemplo: {\"predictions\": [{\"game\": \"LEV vs OSA\", \"favorite\": \"Levante UD\", "
+        "\"score\": \"2-1\", \"confidence\": 65}]}\n"
         "Usa exactamente el RESUMEN que aparece en cada partido para el campo 'game'.\n\n"
     )
 
@@ -258,7 +261,7 @@ def build_sports_prompt(games_data: list) -> str:
                     prompt += f"  {team_name}: {stat_str}\n"
         prompt += "\n"
 
-    prompt += "Genera ahora el JSON con las predicciones (un elemento por partido)."
+    prompt += "Genera ahora el JSON con las predicciones (un elemento por partido, con confianza)."
     return prompt
 
 

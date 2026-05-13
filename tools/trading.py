@@ -293,7 +293,7 @@ def build_news_prompt(coins_df: pd.DataFrame) -> str:
     return prompt
 
 # ------------------------------------------------------------
-# NUEVAS FUNCIONES PARA ANÁLISIS TÉCNICO DE BITCOIN
+# NUEVAS FUNCIONES PARA ANÁLISIS TÉCNICO DE CRIPTOMONEDAS
 # ------------------------------------------------------------
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -360,36 +360,35 @@ def detect_candle_patterns(df: pd.DataFrame) -> list:
     return patterns
 
 
-def get_current_btc_price() -> float | None:
-    """Obtiene el último precio de BTCUSDT desde la API de Binance."""
+def get_current_crypto_price(symbol: str) -> float | None:
+    """Obtiene el último precio de un símbolo desde la API de Binance."""
     try:
-        resp = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5)
+        resp = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5)
         resp.raise_for_status()
         return float(resp.json()["price"])
     except Exception as e:
-        print(f"Error obteniendo precio BTC: {e}")
+        print(f"Error obteniendo precio {symbol}: {e}")
         return None
 
 
-def build_bitcoin_analysis_prompt() -> str:
+def build_crypto_analysis_prompt(symbol: str = "BTCUSDT") -> str:
     """
-    Obtiene datos de BTCUSDT (diario, 90 velas), calcula indicadores y construye un prompt
+    Obtiene datos de un par USDT (diario, 90 velas), calcula indicadores y construye un prompt
     que solicita una respuesta JSON estructurada con la predicción.
     """
-    SYMBOL = "BTCUSDT"
     INTERVAL = "1d"
     LIMIT = 90
 
-    df = _get_klines(SYMBOL, INTERVAL, LIMIT)
+    df = _get_klines(symbol, INTERVAL, LIMIT)
     if df.empty:
-        return "Error al obtener datos de Bitcoin. Intenta de nuevo más tarde."
+        return f"Error al obtener datos de {symbol}. Intenta de nuevo más tarde."
 
     close = df['Close']
     last_price = close.iloc[-1]
     high_90 = df['High'].max()
     low_90 = df['Low'].min()
 
-    rsi_diario = _get_rsi_for_timeframe(SYMBOL, "1d", LIMIT, period=14)
+    rsi_diario = _get_rsi_for_timeframe(symbol, "1d", LIMIT, period=14)
 
     atr_series = calculate_atr(df, period=14)
     current_atr = atr_series.iloc[-1]
@@ -399,7 +398,6 @@ def build_bitcoin_analysis_prompt() -> str:
 
     fib_levels = calculate_fibonacci_levels(df)
 
-    # Soportes y resistencias simples
     df_1m = df.tail(30)
     df_1w = df.tail(7)
     resistencias_1m = df_1m['High'].nlargest(3).tolist()
@@ -410,9 +408,8 @@ def build_bitcoin_analysis_prompt() -> str:
     patterns = detect_candle_patterns(df)
     patterns_str = ", ".join(patterns) if patterns else "Ninguno detectado"
 
-    # Construcción del prompt (ahora pide JSON)
     prompt = (
-        "Eres un analista técnico experto en Bitcoin. Analiza los siguientes datos y devuelve "
+        f"Eres un analista técnico experto en {symbol}. Analiza los siguientes datos y devuelve "
         "**exclusivamente** un JSON (sin texto adicional) con tu predicción para el corto plazo (próximos días).\n"
         "El JSON debe tener esta estructura exacta:\n"
         '{"direction": "bullish" o "bearish", "target_price": número, "reasoning": "breve explicación"}\n\n'
