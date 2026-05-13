@@ -35,7 +35,7 @@
 3. REQUISITOS
    - Python 3.10 o superior.
    - Ollama instalado y corriendo (https://ollama.com).
-   - Modelos descargados (llama3.1, codellama, etc.).
+   - Modelos descargados (llama3.1, codellama, 📈 Modelo para trading de criptomonedas deepseek-r1:8b⚽ Modelo para deportes qwen3:8b).
    - Paquetes Python listados en requirements.txt.
 
 4. INSTALACIÓN Y PUESTA EN MARCHA

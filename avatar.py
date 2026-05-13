@@ -8,9 +8,9 @@ import threading
 import json
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon
+    QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
 from config import AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE, COMMUNICATION_PORT, STATUS_CHECK_INTERVAL
 
@@ -31,12 +31,13 @@ class FloatingAvatar(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
+        # Tamaño mínimo para evitar colapsos
+        self.setMinimumSize(400, 300)
+
         self.avatar_width = 150
-        self.avatar_height_body = 180
         self.chat_area_width = 320
-        self.total_width = self.avatar_width + self.chat_area_width
-        self.total_height = 380
-        self.setFixedSize(self.total_width, self.total_height)
+        # Dimensiones iniciales
+        self.resize(self.avatar_width + self.chat_area_width, 380)
 
         self.use_custom_image = False
         if os.path.exists(AVATAR_IMAGE_PATH):
@@ -48,9 +49,8 @@ class FloatingAvatar(QWidget):
         else:
             self.pixmap = None
 
-        # Panel de estado
+        # ---- Panel de estado ----
         self.status_panel = QWidget(self)
-        self.status_panel.setGeometry(self.avatar_width, 0, self.chat_area_width - 20, 25)
         self.status_panel.setStyleSheet("background: transparent;")
         status_layout = QHBoxLayout(self.status_panel)
         status_layout.setContentsMargins(0, 0, 0, 0)
@@ -71,19 +71,18 @@ class FloatingAvatar(QWidget):
 
         self.status_updated.connect(self._update_status_indicators)
 
-        # Zona de chat
+        # ---- Zona de chat ----
         self.chat_widget = QWidget(self)
-        self.chat_widget.setGeometry(self.avatar_width, 30, self.chat_area_width - 20, self.total_height - 40)
         self.chat_widget.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(self.chat_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Burbuja de respuesta
+        # Burbuja de respuesta (sin altura máxima fija, crece con la ventana)
         self.response_scroll = QScrollArea()
         self.response_scroll.setWidgetResizable(True)
         self.response_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self.response_scroll.setMaximumHeight(200)
+        self.response_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.response_bubble = QTextEdit()
         self.response_bubble.setReadOnly(True)
@@ -130,6 +129,10 @@ class FloatingAvatar(QWidget):
         self.eye_visible = True
         self.movement_enabled = True
         self.user_interacting = False
+        self.resizing = False
+        self.resize_edge = None
+        self.resize_start_pos = None
+        self.resize_start_geom = None
 
         self.thinking_changed.connect(self._on_thinking_changed)
         self.response_ready.connect(self._on_response_ready)
@@ -187,7 +190,102 @@ class FloatingAvatar(QWidget):
 
         self.show()
         self.raise_()
+        self.update_geometry()  # Posiciona los widgets internos
 
+    # ------------------------------------------------------------
+    # Redimensionamiento manual
+    # ------------------------------------------------------------
+    def update_geometry(self):
+        """Reubica y redimensiona los widgets internos según el tamaño de la ventana."""
+        w = self.width()
+        h = self.height()
+        # Panel de estado en la parte superior derecha
+        self.status_panel.setGeometry(self.avatar_width, 5, w - self.avatar_width - 10, 25)
+        # Área de chat
+        self.chat_widget.setGeometry(self.avatar_width, 35, w - self.avatar_width - 15, h - 45)
+
+    def resizeEvent(self, event):
+        self.update_geometry()
+        super().resizeEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            edge = self._detect_edge(event.pos())
+            if edge:
+                self.resizing = True
+                self.resize_edge = edge
+                self.resize_start_pos = event.globalPos()
+                self.resize_start_geom = self.geometry()
+                event.accept()
+                return
+            # Si no, iniciar arrastre
+            self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self.resizing:
+            delta = event.globalPos() - self.resize_start_pos
+            new_geom = self.resize_start_geom
+            if 'e' in self.resize_edge:
+                new_geom.setRight(new_geom.right() + delta.x())
+            if 'w' in self.resize_edge:
+                new_geom.setLeft(new_geom.left() + delta.x())
+            if 's' in self.resize_edge:
+                new_geom.setBottom(new_geom.bottom() + delta.y())
+            if 'n' in self.resize_edge:
+                new_geom.setTop(new_geom.top() + delta.y())
+            # Aplicar tamaño mínimo
+            if new_geom.width() < self.minimumWidth():
+                new_geom.setWidth(self.minimumWidth())
+            if new_geom.height() < self.minimumHeight():
+                new_geom.setHeight(self.minimumHeight())
+            self.setGeometry(new_geom)
+            event.accept()
+            return
+        elif event.buttons() == Qt.LeftButton:
+            self.move(event.globalPos() - self.drag_pos)
+            event.accept()
+        else:
+            # Cambiar cursor al pasar por bordes
+            edge = self._detect_edge(event.pos())
+            if edge == 'nw' or edge == 'se':
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif edge == 'ne' or edge == 'sw':
+                self.setCursor(Qt.SizeBDiagCursor)
+            elif edge in ('n', 's'):
+                self.setCursor(Qt.SizeVerCursor)
+            elif edge in ('e', 'w'):
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        if self.resizing:
+            self.resizing = False
+            self.resize_edge = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _detect_edge(self, pos):
+        """Devuelve una cadena con las direcciones de borde ('n','s','e','w') si el cursor está cerca del borde."""
+        margin = 8
+        w, h = self.width(), self.height()
+        x, y = pos.x(), pos.y()
+        edges = ''
+        if x <= margin:
+            edges += 'w'
+        elif x >= w - margin:
+            edges += 'e'
+        if y <= margin:
+            edges += 'n'
+        elif y >= h - margin:
+            edges += 's'
+        return edges if edges else None
+
+    # ------------------------------------------------------------
+    # Resto de funcionalidades (sin cambios significativos)
+    # ------------------------------------------------------------
     def request_status(self):
         def _ask():
             try:
@@ -254,7 +352,7 @@ class FloatingAvatar(QWidget):
         self.update()
 
     def pick_new_destination(self):
-        if not self.movement_enabled or self.user_interacting:
+        if not self.movement_enabled or self.user_interacting or self.resizing:
             return
         screen = QApplication.primaryScreen()
         if screen is None:
@@ -386,10 +484,9 @@ class FloatingAvatar(QWidget):
             menu.addAction("🛑 No caminar").triggered.connect(self.toggle_movement)
         else:
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
-        menu.addAction("₿ Bitcoin").triggered.connect(self.show_bitcoin_analysis)  # ← NUEVO
+        menu.addAction("₿ Bitcoin").triggered.connect(self.show_bitcoin_analysis)
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
 
-        # Submenú Deporte
         sports_menu = QMenu("🏈 Deporte", self)
         sports_menu.addAction("Todos los deportes").triggered.connect(lambda: self.show_sports_analysis(None))
         sports_menu.addAction("Solo fútbol").triggered.connect(lambda: self.show_sports_analysis("soccer"))
@@ -418,18 +515,15 @@ class FloatingAvatar(QWidget):
             self.move_timer.stop()
             self.target_pos = None
 
-    def show_bitcoin_analysis(self):          # ← NUEVO
+    def show_bitcoin_analysis(self):
         self.start_query("__BTC__")
-
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
-
     def show_sports_analysis(self, category=None):
         if category:
             self.start_query(f"__SPORTS__:{category}")
         else:
             self.start_query("__SPORTS__")
-
     def show_report(self):
         self.start_query("__REPORT__")
     def show_history(self):
@@ -452,34 +546,14 @@ class FloatingAvatar(QWidget):
             self.show_from_tray()
 
     def expand_bubble(self):
-        current = self.response_scroll.maximumHeight()
-        new_height = min(current + 100, 500)
-        self.response_scroll.setMaximumHeight(new_height)
-        self.adjust_window_height(new_height)
+        # Aumenta el tamaño de la ventana 100 px en altura
+        new_h = self.height() + 100
+        self.resize(self.width(), new_h)
+        self.update_geometry()
         self.response_scroll.show()
 
     def hide_bubble(self):
         self.response_scroll.hide()
-
-    def adjust_window_height(self, bubble_height):
-        base_height = 380
-        extra_space = max(0, bubble_height - 200)
-        new_total_height = base_height + extra_space
-        self.setFixedSize(self.total_width, new_total_height)
-        self.chat_widget.setGeometry(
-            self.avatar_width, 30,
-            self.chat_area_width - 20, new_total_height - 40
-        )
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton:
-            self.move(event.globalPos() - self.drag_pos)
-            event.accept()
 
     def closeEvent(self, event):
         event.ignore()

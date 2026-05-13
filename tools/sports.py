@@ -225,12 +225,12 @@ def build_sports_prompt(games_data: list) -> str:
         prompt += "No hay partidos programados para el día de hoy. Se muestran los próximos encuentros.\n"
 
     prompt += (
-        "⚠️ IMPORTANTE: Devuelve tu respuesta **exclusivamente** en formato JSON, "
-        "sin texto adicional fuera del JSON. El JSON debe tener la siguiente estructura:\n"
-        '{"predictions": [{"game": "RESUMEN_EXACTO_DEL_PARTIDO", "favorite": "nombre del equipo favorito", "score": "marcador estimado (ej. 3-2)"}]}\n'
-        "Para el campo 'game' debes usar **exactamente** el resumen (RESUMEN) que se muestra debajo del nombre de la liga, "
-        "sin añadir ni quitar nada. Por ejemplo, si ves 'RESUMEN: LEV vs OSA', tu JSON llevará \"game\": \"LEV vs OSA\".\n"
-        "No uses herramientas ni funciones. Responde solo con el JSON.\n\n"
+        "⚠️ **INSTRUCCIÓN ESTRICTA**: Debes devolver **exactamente** un JSON válido y nada más. "
+        "La lista 'predictions' debe tener **un elemento por cada partido**, nunca vacía. "
+        "El formato debe ser:\n"
+        '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", "score": "marcador estimado (ej. 3-2)"}]}\n'
+        "Por ejemplo: {\"predictions\": [{\"game\": \"LEV vs OSA\", \"favorite\": \"Levante UD\", \"score\": \"2-1\"}]}\n"
+        "Usa exactamente el RESUMEN que aparece en cada partido para el campo 'game'.\n\n"
     )
 
     for game in games_data:
@@ -242,7 +242,7 @@ def build_sports_prompt(games_data: list) -> str:
         teams_line = " vs ".join(team_names)
 
         prompt += f"**{game['league']}** ({when}): {teams_line} - {game.get('start_time', '')}\n"
-        prompt += f"RESUMEN: {game['summary']}\n"   # <-- Identificador exacto que debe usar el modelo
+        prompt += f"RESUMEN: {game['summary']}\n"
         prompt += f"Estado: {game['status']}\n"
         for team in game["teams"]:
             record = f" ({team['record']})" if team.get("record") else ""
@@ -258,7 +258,7 @@ def build_sports_prompt(games_data: list) -> str:
                     prompt += f"  {team_name}: {stat_str}\n"
         prompt += "\n"
 
-    prompt += "Proporciona el JSON con las predicciones para estos partidos. Recuerda usar exactamente el RESUMEN proporcionado para cada partido."
+    prompt += "Genera ahora el JSON con las predicciones (un elemento por partido)."
     return prompt
 
 

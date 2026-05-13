@@ -5,16 +5,21 @@ import socket
 import threading
 import json
 import time
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
-from config import COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT, OLLAMA_MODEL, OLLAMA_HOST, SPORTS_REFRESH_INTERVAL
+from config import (
+    COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT,
+    OLLAMA_MODEL, OLLAMA_TRADING_MODEL, OLLAMA_SPORTS_MODEL,
+    OLLAMA_HOST, SPORTS_REFRESH_INTERVAL
+)
 from tools.trading import (
     start_binance_stream, fetch_live_prices_for_news, build_news_prompt,
     SELECTED_CRYPTO, is_binance_stream_active, build_bitcoin_analysis_prompt, get_current_btc_price
 )
 from tools.memory import load_recent_history, save_message
 from agent import process_user_message
-from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result, enrich_games_with_stats, is_espn_available
+from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result, is_espn_available
 from tools.predictions import (
     save_predictions, get_all_predictions,
     save_crypto_prediction, get_all_crypto_predictions, update_crypto_prediction_result
@@ -38,7 +43,8 @@ SYSTEM_PROMPT_SPORTS = (
     "cuotas, estadísticas avanzadas) y debes devolver exclusivamente un JSON con tus predicciones, "
     "sin texto adicional. El formato debe ser: "
     '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", "score": "marcador estimado"}]}.'
-    "Usa exactamente el RESUMEN que aparece en cada partido para el campo 'game'."
+    "Usa exactamente el RESUMEN que aparece en cada partido para el campo 'game'. "
+    "**No devuelvas nunca una lista vacía**; debes hacer una predicción para cada partido."
 )
 
 SYSTEM_PROMPT_BTC = (
@@ -76,21 +82,71 @@ def recv_exactly(conn, n):
     return buf
 
 
-def direct_ollama_query(system_prompt: str, user_prompt: str) -> str:
+def direct_ollama_query(system_prompt: str, user_prompt: str, model: str = OLLAMA_MODEL) -> str:
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages, stream=False)
+    response = ollama_client.chat(model=model, messages=messages, stream=False)
     return response["message"]["content"]
 
 
-def format_sports_predictions(predictions_json: str, games_data: list = None) -> str:
+def _extract_first_json(text: str) -> str | None:
+    """
+    Intenta extraer el primer objeto JSON válido de un texto que puede contener
+    texto adicional antes o después del JSON.
+    """
+    # Buscar la primera llave de apertura
+    start = text.find('{')
+    if start == -1:
+        return None
+    # Buscar la última llave de cierre a partir del inicio
+    end = text.rfind('}')
+    if end == -1:
+        return None
+    candidate = text[start:end+1]
+    # Verificar que sea JSON válido
     try:
-        data = json.loads(predictions_json)
+        json.loads(candidate)
+        return candidate
+    except:
+        # Si falla, intentamos recortar hasta el último '}' que esté balanceado
+        depth = 0
+        last_valid_end = -1
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    last_valid_end = i
+                    break
+        if last_valid_end != -1:
+            candidate2 = text[start:last_valid_end+1]
+            try:
+                json.loads(candidate2)
+                return candidate2
+            except:
+                pass
+    return None
+
+
+def format_sports_predictions(predictions_json: str, games_data: list = None) -> str:
+    """
+    Convierte la respuesta JSON del modelo en un texto legible.
+    Si el JSON no es válido o la lista está vacía, intenta extraer la información
+    del texto bruto o devuelve el mensaje original.
+    """
+    # Intentar limpiar primero
+    clean_json = _extract_first_json(predictions_json)
+    if clean_json is None:
+        return predictions_json if predictions_json.strip() else "El modelo no devolvió una respuesta válida."
+
+    try:
+        data = json.loads(clean_json)
         preds = data.get("predictions", [])
         if not preds:
-            return "No se recibieron predicciones estructuradas."
+            return "⚠️ El modelo devolvió un JSON sin predicciones. Respuesta original:\n\n" + predictions_json
 
         game_names = {}
         if games_data:
@@ -117,7 +173,7 @@ def format_sports_predictions(predictions_json: str, games_data: list = None) ->
             display_game = game_names.get(game_key, game_key)
             lines.append(f"{i}. **{display_game}** → Favorito: **{fav}**{score_str}")
         return "\n".join(lines)
-    except Exception:
+    except json.JSONDecodeError:
         return predictions_json
 
 
@@ -143,33 +199,36 @@ def handle_client(conn, addr):
 
         history = load_recent_history(HISTORY_LIMIT)
 
+        # ------------------ TRADING (deepseek‑r1:8b) ------------------
         if user_input.startswith("__NEWS__"):
             coins_df = fetch_live_prices_for_news(limit=11)
             news_prompt = build_news_prompt(coins_df)
-            response = direct_ollama_query(SYSTEM_PROMPT_NEWS, news_prompt)
+            response = direct_ollama_query(SYSTEM_PROMPT_NEWS, news_prompt, model=OLLAMA_TRADING_MODEL)
             save_message("user", "📰 Noticias del día")
             save_message("assistant", response)
             print(f"Respuesta (noticias): {response[:100]}...")
 
         elif user_input.startswith("__BTC__"):
             btc_prompt = build_bitcoin_analysis_prompt()
-            raw_response = direct_ollama_query(SYSTEM_PROMPT_BTC, btc_prompt)
+            raw_response = direct_ollama_query(SYSTEM_PROMPT_BTC, btc_prompt, model=OLLAMA_TRADING_MODEL)
 
-            # Guardar la predicción si es JSON válido
-            try:
-                pred_json = json.loads(raw_response)
-                direction = pred_json.get("direction", "").lower()
-                target_price = float(pred_json.get("target_price", 0))
-                current_btc = get_current_btc_price()
-                if direction in ("bullish", "bearish") and current_btc:
-                    save_crypto_prediction(direction, target_price, current_btc, raw_response)
-                    print(f"Predicción BTC guardada: {direction} objetivo {target_price}")
-            except Exception as e:
-                print(f"No se pudo guardar la predicción BTC: {e}")
+            # Limpiar JSON y guardar predicción
+            clean_json = _extract_first_json(raw_response)
+            if clean_json:
+                try:
+                    pred_json = json.loads(clean_json)
+                    direction = pred_json.get("direction", "").lower()
+                    target_price = float(pred_json.get("target_price", 0))
+                    current_btc = get_current_btc_price()
+                    if direction in ("bullish", "bearish") and current_btc:
+                        save_crypto_prediction(direction, target_price, current_btc, raw_response)
+                        print(f"Predicción BTC guardada: {direction} objetivo {target_price}")
+                except Exception as e:
+                    print(f"No se pudo guardar la predicción BTC: {e}")
 
-            # Mostrar la respuesta formateada (texto amigable)
+            # Formatear respuesta para mostrar
             try:
-                pred_json = json.loads(raw_response)
+                pred_json = json.loads(clean_json) if clean_json else json.loads(raw_response)
                 direction = pred_json.get("direction", "desconocida")
                 target = pred_json.get("target_price", "N/D")
                 reasoning = pred_json.get("reasoning", "")
@@ -181,6 +240,7 @@ def handle_client(conn, addr):
             save_message("assistant", response)
             print(f"Respuesta (Bitcoin): {response[:100]}...")
 
+        # ------------------ DEPORTES (qwen3:8b) ------------------
         elif user_input.startswith("__SPORTS__"):
             parts = user_input.split(":", 1)
             category = parts[1].strip() if len(parts) > 1 else None
@@ -195,14 +255,22 @@ def handle_client(conn, addr):
                 games_data, events_meta = fetch_sports_data(category_filter=category)
 
             sports_prompt = build_sports_prompt(games_data)
-            raw_response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt)
+            raw_response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt, model=OLLAMA_SPORTS_MODEL)
 
-            try:
-                pred_json = json.loads(raw_response)
-                predictions = pred_json.get("predictions", [])
-                save_predictions(predictions, raw_response, events_meta)
-            except json.JSONDecodeError:
-                print("No se pudo parsear la respuesta JSON del modelo. No se guardan predicciones estructuradas.")
+            # Limpiar JSON para guardar
+            clean_json = _extract_first_json(raw_response)
+            if clean_json:
+                try:
+                    pred_json = json.loads(clean_json)
+                    predictions = pred_json.get("predictions", [])
+                    if predictions:
+                        save_predictions(predictions, clean_json, events_meta)
+                    else:
+                        print("Predicciones vacías, no se guardan.")
+                except json.JSONDecodeError:
+                    print("No se pudo parsear la respuesta JSON del modelo. No se guardan predicciones estructuradas.")
+            else:
+                print("No se encontró JSON válido en la respuesta deportiva.")
 
             formatted_response = format_sports_predictions(raw_response, games_data)
             save_message("user", f"🏈 Análisis deportivo ({category or 'todos'})")
@@ -210,8 +278,8 @@ def handle_client(conn, addr):
             response = formatted_response
             print(f"Respuesta (deportes): {response[:100]}...")
 
+        # ------------------ RESTO DE OPCIONES (modelo general) ------------------
         elif user_input.startswith("__REPORT__"):
-            # --- Reporte deportivo (sin cambios) ---
             all_preds = get_all_predictions()
             if not all_preds:
                 response = "No hay predicciones guardadas aún. Usa primero la opción Deporte."
@@ -266,7 +334,7 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
-            # --- Reporte cripto (Bitcoin) ---
+            # Reporte Bitcoin
             crypto_preds = get_all_crypto_predictions()
             response += "\n₿ **Predicciones de Bitcoin**\n\n"
             if not crypto_preds:
@@ -285,7 +353,6 @@ def handle_client(conn, addr):
                     except:
                         pred_time = None
 
-                    # Si ya fue chequeado, usar resultado guardado
                     if cp["checked"]:
                         if cp["result"] == "acierto":
                             btc_aciertos += 1
@@ -295,13 +362,11 @@ def handle_client(conn, addr):
                             detalles_btc.append(f"❌ {cp['direction']} → fallo")
                         continue
 
-                    # Si no han pasado 24 horas, se considera pendiente
                     if pred_time and (now - pred_time) < timedelta(hours=24):
                         btc_pendientes += 1
                         detalles_btc.append(f"⏳ {cp['direction']} (pendiente, predicho {pred_time.strftime('%d/%m %H:%M')})")
                         continue
 
-                    # Evaluar después de 24h
                     current_price = get_current_btc_price()
                     if current_price is None:
                         btc_pendientes += 1
