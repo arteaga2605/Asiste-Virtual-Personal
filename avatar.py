@@ -8,10 +8,9 @@ import threading
 import json
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon, QSizePolicy,
-    QDialog, QVBoxLayout as QV, QPushButton
+    QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
 from config import (
     AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE,
@@ -42,17 +41,14 @@ class ToastNotification(QWidget):
             font-size: 14px;
         """)
         label.setWordWrap(True)
-        layout = QV(self)
+        layout = QVBoxLayout()
         layout.addWidget(label)
         self.setLayout(layout)
 
         self.adjustSize()
-        # Posicionar en la esquina inferior derecha
         screen = QApplication.primaryScreen().availableGeometry()
         self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 20)
 
-        # Animación de opacidad
-        self.opacity_effect = self.setWindowOpacity(0.0)
         self.animation = QPropertyAnimation(self, b"windowOpacity")
         self.animation.setDuration(300)
         self.animation.setStartValue(0.0)
@@ -93,6 +89,7 @@ class FloatingAvatar(QWidget):
         self.chat_area_width = 320
         self.resize(self.avatar_width + self.chat_area_width, 380)
 
+        # Imagen personalizada (opcional)
         self.use_custom_image = False
         if os.path.exists(AVATAR_IMAGE_PATH):
             loaded = QPixmap(AVATAR_IMAGE_PATH)
@@ -181,12 +178,19 @@ class FloatingAvatar(QWidget):
 
         self.is_thinking = False
         self.eye_visible = True
+        self.eyes_red = False
+
         self.movement_enabled = True
         self.user_interacting = False
         self.resizing = False
         self.resize_edge = None
         self.resize_start_pos = None
         self.resize_start_geom = None
+
+        # Animación del cigarro
+        self.smoke_progress = 0.0          # 0 = brazo abajo, 1 = brazo a la boca
+        self.smoke_timer = QTimer(self)
+        self.smoke_timer.timeout.connect(self._animate_smoke)
 
         self.thinking_changed.connect(self._on_thinking_changed)
         self.response_ready.connect(self._on_response_ready)
@@ -230,7 +234,7 @@ class FloatingAvatar(QWidget):
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
 
-        # Timer para alertas → ahora muestra toast
+        # Timer para alertas → toast
         self.alert_timer = QTimer(self)
         self.alert_timer.timeout.connect(self.check_auto_alerts)
         self.alert_timer.start(10000)
@@ -347,7 +351,7 @@ class FloatingAvatar(QWidget):
             pass
 
     # ------------------------------------------------------------
-    # Resto de funcionalidades
+    # Estado del sistema
     # ------------------------------------------------------------
     def request_status(self):
         def _ask():
@@ -375,6 +379,9 @@ class FloatingAvatar(QWidget):
         self.status_espn.setStyleSheet(f"color: {color(status.get('espn', False))};")
         self.status_ollama.setStyleSheet(f"color: {color(status.get('ollama', False))};")
 
+    # ------------------------------------------------------------
+    # Parpadeo y ojos rojos
+    # ------------------------------------------------------------
     def eventFilter(self, obj, event):
         if obj == self.input_field:
             if event.type() == event.FocusIn:
@@ -401,6 +408,9 @@ class FloatingAvatar(QWidget):
         self.eye_visible = True
         self.update()
 
+    # ------------------------------------------------------------
+    # Movimiento
+    # ------------------------------------------------------------
     def pick_new_destination(self):
         if not self.movement_enabled or self.user_interacting or self.resizing:
             return
@@ -432,6 +442,31 @@ class FloatingAvatar(QWidget):
         new_y = int(current.y() + dy * step_size)
         self.move(new_x, new_y)
 
+    # ------------------------------------------------------------
+    # Animación del cigarro (fumando)
+    # ------------------------------------------------------------
+    def _animate_smoke(self):
+        step = 0.05  # velocidad de subida/bajada
+        if self.is_thinking:
+            # Subir el brazo hasta la boca
+            if self.smoke_progress < 1.0:
+                self.smoke_progress = min(self.smoke_progress + step, 1.0)
+                self.update()
+        else:
+            # Bajar el brazo
+            if self.smoke_progress > 0.0:
+                self.smoke_progress = max(self.smoke_progress - step, 0.0)
+                self.update()
+            else:
+                self.smoke_timer.stop()
+
+    def _start_smoke_animation(self):
+        if not self.smoke_timer.isActive():
+            self.smoke_timer.start(30)
+
+    # ------------------------------------------------------------
+    # Comunicación con el servidor
+    # ------------------------------------------------------------
     def send_question(self):
         text = self.input_field.text().strip()
         if not text:
@@ -474,7 +509,14 @@ class FloatingAvatar(QWidget):
 
     def _on_thinking_changed(self, state):
         self.is_thinking = state
+        self.eyes_red = state
         self.bulb_label.setVisible(state)
+        if state:
+            self._start_smoke_animation()
+        else:
+            # La animación seguirá corriendo hasta que smoke_progress llegue a 0
+            if not self.smoke_timer.isActive():
+                self._start_smoke_animation()
         self.update()
 
     def _on_response_ready(self, text):
@@ -483,51 +525,134 @@ class FloatingAvatar(QWidget):
 
     def set_thinking(self, state):
         self.is_thinking = state
+        self.eyes_red = state
         self.bulb_label.setVisible(state)
+        if state:
+            self._start_smoke_animation()
+        else:
+            if not self.smoke_timer.isActive():
+                self._start_smoke_animation()
         self.update()
 
     def update_bulb_position(self):
         cx = self.avatar_width // 2
-        head_top = 90 - 45
-        self.bulb_label.move(cx - self.bulb_label.width()//2, head_top - 40)
+        self.bulb_label.move(cx - self.bulb_label.width()//2, 30)
 
+    # ------------------------------------------------------------
+    # PINTADO DE TOALLIN (South Park)
+    # ------------------------------------------------------------
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
         cx = self.avatar_width // 2
-        cy = 90
+        cy = 110  # centro vertical del cuerpo de toalla
+
         if self.use_custom_image and self.pixmap:
             x = (self.avatar_width - self.pixmap.width()) // 2
             y = cy - self.pixmap.height()//2
             painter.drawPixmap(x, y, self.pixmap)
         else:
-            painter.setPen(QPen(QColor(100, 70, 30), 5, Qt.SolidLine, Qt.RoundCap))
-            shoulder_y = cy - 5
-            painter.drawLine(cx - 35, shoulder_y, cx - 60, shoulder_y + 20)
-            painter.drawLine(cx - 60, shoulder_y + 20, cx - 50, shoulder_y + 30)
-            painter.drawLine(cx + 35, shoulder_y, cx + 60, shoulder_y + 20)
-            painter.drawLine(cx + 60, shoulder_y + 20, cx + 50, shoulder_y + 30)
-            r = 45
-            painter.setBrush(QColor(255, 220, 150))
-            painter.setPen(QPen(QColor(100, 70, 30), 3))
-            painter.drawEllipse(cx - r, cy - r, r*2, r*2)
-            eye_y = cy - 5
+            # ---- CUERPO (toalla blanca) ----
+            toalla_w = 70
+            toalla_h = 90
+            painter.setBrush(QColor(255, 255, 255))
+            painter.setPen(QPen(QColor(180, 180, 180), 2))
+            painter.drawRoundedRect(cx - toalla_w//2, cy - toalla_h//2, toalla_w, toalla_h, 8, 8)
+
+            # Dobleces de la toalla (líneas horizontales)
+            pen_fold = QPen(QColor(220, 220, 220), 1)
+            painter.setPen(pen_fold)
+            for y_fold in range(cy - 30, cy + 30, 15):
+                painter.drawLine(cx - 30, y_fold, cx + 30, y_fold)
+
+            # ---- BRAZOS (marrón) ----
+            painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
+
+            # Brazo izquierdo (el que fuma) – se mueve según smoke_progress
+            shoulder_x = cx - 38
+            shoulder_y = cy - 20
+            hand_down_x = cx - 60
+            hand_down_y = cy + 5
+            mouth_x = cx - 8
+            mouth_y = cy + 25  # posición de la boca
+
+            # Interpolación entre posición baja y posición de fumar
+            current_hand_x = int(hand_down_x + (mouth_x - hand_down_x) * self.smoke_progress)
+            current_hand_y = int(hand_down_y + (mouth_y - hand_down_y) * self.smoke_progress)
+
+            # Dibujar brazo (línea hasta la mano)
+            painter.drawLine(shoulder_x, shoulder_y, current_hand_x, current_hand_y)
+
+            # ---- CIGARRO (en la mano) ----
+            if self.smoke_progress > 0.1:  # solo visible si el brazo está un poco levantado
+                # Cigarro blanco con punta naranja
+                cigar_angle = 30  # grados hacia arriba
+                cigar_length = 20
+                # Calcular extremo del cigarro (hacia la derecha/arriba desde la mano)
+                import math
+                rad = math.radians(cigar_angle)
+                cigar_end_x = current_hand_x + int(cigar_length * math.cos(rad))
+                cigar_end_y = current_hand_y - int(cigar_length * math.sin(rad))
+
+                painter.setPen(QPen(QColor(200, 200, 200), 4, Qt.SolidLine, Qt.RoundCap))
+                painter.drawLine(current_hand_x, current_hand_y, cigar_end_x, cigar_end_y)
+
+                # Punta encendida (naranja/rojo)
+                painter.setPen(QPen(QColor(255, 100, 0), 4, Qt.SolidLine, Qt.RoundCap))
+                painter.drawLine(cigar_end_x - 4, cigar_end_y + 1, cigar_end_x, cigar_end_y)
+
+                # Pequeño humo (círculos grises)
+                if self.smoke_progress > 0.5:
+                    painter.setBrush(QColor(200, 200, 200, 100))
+                    painter.setPen(Qt.NoPen)
+                    for offset in [(8, -5), (12, -10), (6, -14)]:
+                        px = cigar_end_x + offset[0] + random.randint(-2, 2)
+                        py = cigar_end_y + offset[1] + random.randint(-2, 2)
+                        painter.drawEllipse(px, py, 4, 4)
+
+            # Brazo derecho (quieto)
+            painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(cx + 38, cy - 20, cx + 60, cy + 5)
+            painter.drawLine(cx + 60, cy + 5, cx + 52, cy + 15)
+
+            # ---- PIERNAS (líneas cortas marrones) ----
+            painter.drawLine(cx - 10, cy + 45, cx - 15, cy + 70)
+            painter.drawLine(cx + 10, cy + 45, cx + 15, cy + 70)
+
+            # ---- OJOS (grandes) ----
+            eye_y = cy - 20
+            eye_spacing = 16
+
             if self.eye_visible:
-                painter.setBrush(Qt.white)
+                eye_color = QColor(255, 60, 60) if self.eyes_red else Qt.white
+                painter.setBrush(eye_color)
                 painter.setPen(QPen(Qt.black, 2))
-                painter.drawEllipse(cx - 20, eye_y - 8, 16, 16)
-                painter.drawEllipse(cx + 4,  eye_y - 8, 16, 16)
+
+                # Ojo izquierdo
+                painter.drawEllipse(cx - eye_spacing - 12, eye_y - 14, 28, 28)
+                # Ojo derecho
+                painter.drawEllipse(cx + eye_spacing - 12, eye_y - 14, 28, 28)
+
+                # Pupilas
                 painter.setBrush(Qt.black)
-                painter.drawEllipse(cx - 16, eye_y - 4, 8, 8)
-                painter.drawEllipse(cx + 8,  eye_y - 4, 8, 8)
+                painter.drawEllipse(cx - eye_spacing - 2, eye_y - 4, 8, 8)
+                painter.drawEllipse(cx + eye_spacing - 2, eye_y - 4, 8, 8)
             else:
                 painter.setPen(QPen(Qt.black, 3))
-                painter.drawLine(cx - 24, eye_y, cx - 10, eye_y)
-                painter.drawLine(cx + 10, eye_y, cx + 24, eye_y)
-            painter.setPen(QPen(Qt.black, 3))
-            painter.drawArc(cx - 8, cy + 15, 16, 12, 0, -180 * 16)
+                painter.drawLine(cx - eye_spacing - 14, eye_y, cx - eye_spacing + 4, eye_y)
+                painter.drawLine(cx + eye_spacing - 4, eye_y, cx + eye_spacing + 14, eye_y)
+
+            # ---- BOCA (línea pequeña) ----
+            painter.setPen(QPen(Qt.black, 2))
+            mouth_y_line = cy + 25
+            painter.drawLine(cx - 5, mouth_y_line, cx + 5, mouth_y_line)
+
         self.update_bulb_position()
 
+    # ------------------------------------------------------------
+    # Menú contextual
+    # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         if self.movement_enabled:
@@ -535,10 +660,8 @@ class FloatingAvatar(QWidget):
         else:
             menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
 
-        # Submenú Criptomonedas
         crypto_menu = QMenu("₿ Criptomonedas", self)
         for sym in SELECTED_CRYPTO:
-            # Nombre bonito
             name = sym.replace("USDT", "")
             crypto_menu.addAction(f"₿ {name}").triggered.connect(lambda checked, s=sym: self.show_crypto_analysis(s))
         crypto_menu.addSeparator()
@@ -577,16 +700,13 @@ class FloatingAvatar(QWidget):
 
     def show_crypto_analysis(self, symbol):
         self.start_query(f"__CRYPTO__:{symbol}")
-
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
-
     def show_sports_analysis(self, category=None):
         if category:
             self.start_query(f"__SPORTS__:{category}")
         else:
             self.start_query("__SPORTS__")
-
     def show_report(self):
         self.start_query("__REPORT__")
     def show_history(self):
