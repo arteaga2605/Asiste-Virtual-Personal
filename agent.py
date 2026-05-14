@@ -13,9 +13,13 @@ from tools.business import (
     add_note, list_notes,
     add_task, list_tasks, update_task_status,
     add_contact, list_contacts,
-    add_goal, list_goals, update_goal_progress   # <-- nuevas herramientas
+    add_goal, list_goals, update_goal_progress
 )
 from tools.code_executor import execute_python_code
+from tools.trello import (
+    list_boards, list_lists, create_card,
+    list_cards, move_card, add_comment
+)
 
 ollama_client = ollama.Client(host=OLLAMA_HOST)
 
@@ -217,6 +221,93 @@ TOOLS = [
                 "required": ["code"]
             }
         }
+    },
+    # ---------- Trello ----------
+    {
+        "type": "function",
+        "function": {
+            "name": "list_boards",
+            "description": "Lista todos los tableros de Trello del usuario.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_lists",
+            "description": "Lista las listas de un tablero de Trello (por nombre o ID).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "board_name_or_id": {"type": "string", "description": "Nombre o ID del tablero"}
+                },
+                "required": ["board_name_or_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_card",
+            "description": "Crea una tarjeta en una lista de Trello.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "list_name_or_id": {"type": "string", "description": "Nombre o ID de la lista donde crear la tarjeta"},
+                    "board_name_or_id": {"type": "string", "description": "Nombre o ID del tablero que contiene la lista"},
+                    "card_name": {"type": "string", "description": "Nombre de la tarjeta a crear"},
+                    "description": {"type": "string", "description": "Descripción de la tarjeta (opcional)"}
+                },
+                "required": ["list_name_or_id", "board_name_or_id", "card_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_cards",
+            "description": "Lista las tarjetas de un tablero (opcionalmente filtradas por lista).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "board_name_or_id": {"type": "string", "description": "Nombre o ID del tablero"},
+                    "list_name_or_id": {"type": "string", "description": "Nombre o ID de la lista (opcional)"}
+                },
+                "required": ["board_name_or_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_card",
+            "description": "Mueve una tarjeta de Trello a otra lista.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "card_name_or_id": {"type": "string", "description": "Nombre o ID de la tarjeta"},
+                    "board_name_or_id": {"type": "string", "description": "Nombre o ID del tablero"},
+                    "target_list_name_or_id": {"type": "string", "description": "Nombre o ID de la lista destino"}
+                },
+                "required": ["card_name_or_id", "board_name_or_id", "target_list_name_or_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_comment",
+            "description": "Añade un comentario a una tarjeta de Trello.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "card_name_or_id": {"type": "string", "description": "Nombre o ID de la tarjeta"},
+                    "board_name_or_id": {"type": "string", "description": "Nombre o ID del tablero"},
+                    "comment": {"type": "string", "description": "Comentario a añadir"}
+                },
+                "required": ["card_name_or_id", "board_name_or_id", "comment"]
+            }
+        }
     }
 ]
 
@@ -235,6 +326,12 @@ FUNCTION_MAP = {
     "add_goal": add_goal,
     "list_goals": list_goals,
     "update_goal_progress": update_goal_progress,
+    "list_boards": list_boards,
+    "list_lists": list_lists,
+    "create_card": create_card,
+    "list_cards": list_cards,
+    "move_card": move_card,
+    "add_comment": add_comment,
 }
 
 SYSTEM_PROMPT = """
@@ -244,6 +341,7 @@ Eres un asistente virtual personal, amigable y servicial. Tu nombre es "Aria". P
 - Trading y análisis de mercado (interpretar indicadores, datos históricos y precios en vivo de Binance).
 - Gestión de empresa (notas, tareas, contactos, metas de productividad).
 - Programación Python (escribir, explicar y ejecutar código de forma segura).
+- Gestión de proyectos en Trello (listar tableros, crear tarjetas, mover tareas).
 
 Tienes acceso a herramientas para realizar acciones concretas. Úsalas solo cuando sea necesario. Para saludos, preguntas generales o conversación casual, simplemente responde de manera natural y cálida, **sin usar herramientas**.
 

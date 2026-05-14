@@ -667,7 +667,7 @@ class FloatingAvatar(QWidget):
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual (con el nuevo botón)
+    # Menú contextual (con Trello)
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -695,9 +695,17 @@ class FloatingAvatar(QWidget):
         sports_menu.addAction("Solo hockey (NHL)").triggered.connect(lambda: self.show_sports_analysis("hockey"))
         menu.addMenu(sports_menu)
 
+        # Submenú Trello
+        trello_menu = QMenu("📋 Trello", self)
+        trello_menu.addAction("Listar tableros").triggered.connect(self.show_trello_boards)
+        trello_menu.addAction("Listar listas").triggered.connect(self.show_trello_lists)
+        trello_menu.addAction("Listar tarjetas").triggered.connect(self.show_trello_cards)
+        trello_menu.addAction("Crear tarjeta").triggered.connect(self.show_trello_create_card)
+        menu.addMenu(trello_menu)
+
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
-        menu.addAction("💡 Ideas de ingresos").triggered.connect(self.show_income_ideas)  # ← NUEVO
+        menu.addAction("💡 Ideas de ingresos").triggered.connect(self.show_income_ideas)
         menu.addSeparator()
         menu.addAction("🎯 Metas").triggered.connect(self.show_goals)
         menu.addAction("📄 Informe Semanal").triggered.connect(self.show_weekly)
@@ -727,7 +735,7 @@ class FloatingAvatar(QWidget):
             self.start_query("__SPORTS__")
     def show_report(self):
         self.start_query("__REPORT__")
-    def show_income_ideas(self):               # ← NUEVO MÉTODO
+    def show_income_ideas(self):
         self.start_query("__INCOME_IDEAS__")
     def show_history(self):
         self.start_query("__HISTORY__")
@@ -735,6 +743,19 @@ class FloatingAvatar(QWidget):
         self.start_query("__GOALS__")
     def show_weekly(self):
         self.start_query("__WEEKLY__")
+
+    # Trello
+    def show_trello_boards(self):
+        self.start_query("__TRELLO__:list_boards")
+    def show_trello_lists(self):
+        self.input_field.setText("Muéstrame las listas del tablero ")
+        self.input_field.setFocus()
+    def show_trello_cards(self):
+        self.input_field.setText("Muéstrame las tarjetas del tablero ")
+        self.input_field.setFocus()
+    def show_trello_create_card(self):
+        self.input_field.setText("Crea una tarjeta en Trello llamada ")
+        self.input_field.setFocus()
 
     def hide_to_tray(self):
         self.hide()

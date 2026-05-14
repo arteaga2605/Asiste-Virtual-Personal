@@ -10,3 +10,4 @@ PyQt5>=5.15
 python-dotenv>=1.0
 matplotlib
 requests
+py-trello>=0.15.0

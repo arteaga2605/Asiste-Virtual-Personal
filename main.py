@@ -11,7 +11,9 @@ from datetime import datetime, timedelta
 from config import (
     COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT,
     OLLAMA_MODEL, OLLAMA_TRADING_MODEL, OLLAMA_SPORTS_MODEL,
-    OLLAMA_HOST, SPORTS_REFRESH_INTERVAL
+    OLLAMA_HOST, SPORTS_REFRESH_INTERVAL,
+    TRELLO_API_KEY, TRELLO_TOKEN,
+    TRELLO_BOARD_NAME, TRELLO_LIST_PENDIENTES, TRELLO_LIST_GANANCIA, TRELLO_LIST_PERDIDA
 )
 from tools.trading import (
     start_binance_stream, fetch_live_prices_for_news, build_news_prompt,
@@ -22,10 +24,12 @@ from agent import process_user_message
 from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result, is_espn_available, normalize_text
 from tools.predictions import (
     save_predictions, get_all_predictions,
-    save_crypto_prediction, get_all_crypto_predictions, update_crypto_prediction_result
+    save_crypto_prediction, get_all_crypto_predictions, update_crypto_prediction_result,
+    update_crypto_prediction_trello
 )
 from tools.alerts import start_alert_monitor
 from tools.business import generate_weekly_report, list_goals
+from tools.trello import create_card, move_card, add_comment
 import ollama
 
 ollama_client = ollama.Client(host=OLLAMA_HOST)
@@ -186,23 +190,15 @@ def get_system_status() -> str:
 
 
 def analyze_usage_history(history: list) -> str:
-    """
-    Analiza el historial de conversación y devuelve un resumen de uso.
-    """
     if not history:
         return "No hay suficiente historial de uso para generar sugerencias personalizadas."
-
-    # Contar tipos de interacciones
     usage_counter = Counter()
     topics = Counter()
-
     for msg in history:
         content = msg.get("content", "")
         role = msg.get("role", "")
-
         if role == "user":
             content_lower = content.lower()
-            # Detectar marcadores especiales
             if "📰 noticias del día" in content_lower or "noticias" in content_lower:
                 usage_counter["análisis de criptomonedas (noticias)"] += 1
                 topics["criptomonedas"] += 1
@@ -228,26 +224,60 @@ def analyze_usage_history(history: list) -> str:
                 topics["desarrollo"] += 1
             else:
                 usage_counter["consultas generales"] += 1
-
-    # Construir resumen
     summary_lines = [
         "Resumen de uso del asistente:",
         f"- Total de interacciones analizadas: {len([m for m in history if m['role'] == 'user'])}",
     ]
-
     if usage_counter:
         summary_lines.append("\nFrecuencia de uso por funcionalidad:")
         for func, count in usage_counter.most_common(10):
             summary_lines.append(f"  - {func}: {count} veces")
-
     if topics:
         summary_lines.append("\nÁreas de interés principales:")
         for topic, count in topics.most_common(5):
             summary_lines.append(f"  - {topic}: {count} interacciones")
-
     summary_lines.append(f"\nÚltima interacción: {history[-1]['content'][:100]}...")
-
     return "\n".join(summary_lines)
+
+
+def _trello_configured() -> bool:
+    return bool(TRELLO_API_KEY and TRELLO_TOKEN)
+
+
+def _create_prediction_card(symbol: str, direction: str, target_price: float, current_price: float, reasoning: str, pred_id: int):
+    """Crea una tarjeta en Trello para la predicción y actualiza la BD."""
+    if not _trello_configured():
+        return
+    try:
+        card_name = f"{symbol}: {direction.upper()} → ${target_price}"
+        description = (
+            f"Predicción: {direction}\n"
+            f"Precio actual: ${current_price:.2f}\n"
+            f"Objetivo: ${target_price:.2f}\n"
+            f"Razonamiento: {reasoning[:200]}"
+        )
+        result = create_card(TRELLO_LIST_PENDIENTES, TRELLO_BOARD_NAME, card_name, description)
+        if "id" in result:
+            update_crypto_prediction_trello(pred_id, result["id"])
+    except Exception as e:
+        print(f"Error creando tarjeta Trello: {e}")
+
+
+def _handle_crypto_result_trello(pred_id: int, trello_card_id: str, result: str, old_price: float, new_price: float):
+    """Mueve la tarjeta según el resultado y añade un comentario."""
+    if not _trello_configured() or not trello_card_id:
+        return
+    try:
+        target_list = TRELLO_LIST_GANANCIA if result == "acierto" else TRELLO_LIST_PERDIDA
+        move_card(trello_card_id, TRELLO_BOARD_NAME, target_list)
+        comment = (
+            f"Resultado: {result.upper()}\n"
+            f"Precio anterior: ${old_price:.2f}\n"
+            f"Precio actual: ${new_price:.2f}"
+        )
+        add_comment(trello_card_id, TRELLO_BOARD_NAME, comment)
+    except Exception as e:
+        print(f"Error moviendo tarjeta Trello: {e}")
 
 
 def handle_client(conn, addr):
@@ -287,7 +317,8 @@ def handle_client(conn, addr):
                             reasoning = pred_json.get("reasoning", "")
                             current_price = get_current_crypto_price(sym)
                             if current_price and direction in ("bullish", "bearish"):
-                                save_crypto_prediction(sym, direction, target, current_price, raw)
+                                pred_id = save_crypto_prediction(sym, direction, target, current_price, raw)
+                                _create_prediction_card(sym, direction, target, current_price, reasoning, pred_id)
                             resultados.append(f"**{sym}**: {direction.upper()} → objetivo ${target} ({reasoning[:80]}...)")
                         except Exception as e:
                             resultados.append(f"⚠️ {sym}: JSON inválido ({e})")
@@ -306,7 +337,9 @@ def handle_client(conn, addr):
                         target_price = float(pred_json.get("target_price", 0))
                         current_price = get_current_crypto_price(symbol)
                         if direction in ("bullish", "bearish") and current_price:
-                            save_crypto_prediction(symbol, direction, target_price, current_price, raw_response)
+                            pred_id = save_crypto_prediction(symbol, direction, target_price, current_price, raw_response)
+                            _create_prediction_card(symbol, direction, target_price, current_price,
+                                                    pred_json.get("reasoning", ""), pred_id)
                     except Exception as e:
                         print(f"No se pudo guardar la predicción de {symbol}: {e}")
                 try:
@@ -406,7 +439,7 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
-            # Reporte cripto
+            # Reporte cripto (con movimiento automático en Trello)
             crypto_preds = get_all_crypto_predictions()
             response += "\n₿ **Predicciones de Criptomonedas**\n\n"
             if not crypto_preds:
@@ -439,12 +472,15 @@ def handle_client(conn, addr):
                     if predicted_direction == "bullish" and current_price > old_price:
                         update_crypto_prediction_result(cp["id"], "acierto")
                         cripto_stats[symbol]["aciertos"] += 1
+                        _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), "acierto", old_price, current_price)
                     elif predicted_direction == "bearish" and current_price < old_price:
                         update_crypto_prediction_result(cp["id"], "acierto")
                         cripto_stats[symbol]["aciertos"] += 1
+                        _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), "acierto", old_price, current_price)
                     else:
                         update_crypto_prediction_result(cp["id"], "fallo")
                         cripto_stats[symbol]["fallos"] += 1
+                        _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), "fallo", old_price, current_price)
                 for symbol, stats in sorted(cripto_stats.items()):
                     response += f"**{symbol}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
                     if stats['pendientes'] > 0:
@@ -486,7 +522,6 @@ def handle_client(conn, addr):
             response = get_system_status()
 
         elif user_input.startswith("__INCOME_IDEAS__"):
-            # Cargar historial amplio para analizar patrones de uso
             full_history = load_recent_history(limit=100)
             usage_summary = analyze_usage_history(full_history)
             income_prompt = (
