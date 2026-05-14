@@ -152,12 +152,12 @@ def is_binance_stream_active() -> bool:
     return _stream_active
 
 # ------------------------------------------------------------
-# LISTA FIJA DE CRIPTOMONEDAS
+# LISTA FIJA DE CRIPTOMONEDAS (ahora con DASH)
 # ------------------------------------------------------------
 SELECTED_CRYPTO = [
     "BTCUSDT", "XRPUSDT", "BNBUSDT", "SOLUSDT",
     "TRXUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT",
-    "DOTUSDT", "AVAXUSDT", "UNIUSDT"
+    "DOTUSDT", "AVAXUSDT", "UNIUSDT", "DASHUSDT"
 ]
 
 def _get_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
