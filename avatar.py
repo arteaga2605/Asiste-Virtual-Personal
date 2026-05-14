@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QVBoxLayout, QHBoxLayout,
     QTextEdit, QScrollArea, QMenu, QAction, QSystemTrayIcon, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QPropertyAnimation
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
 from config import (
     AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE,
@@ -77,8 +77,8 @@ class ExhaleParticle:
         self.opacity = 180
         self.size = random.randint(4, 8)
         self.vx = random.uniform(-0.5, 0.5)
-        self.vy = random.uniform(-1.5, -0.5)  # sube
-        self.life = 30  # frames
+        self.vy = random.uniform(-1.5, -0.5)
+        self.life = 30
 
     def update(self):
         self.x += self.vx
@@ -110,7 +110,6 @@ class FloatingAvatar(QWidget):
         self.chat_area_width = 320
         self.resize(self.avatar_width + self.chat_area_width, 380)
 
-        # Imagen personalizada (opcional)
         self.use_custom_image = False
         if os.path.exists(AVATAR_IMAGE_PATH):
             loaded = QPixmap(AVATAR_IMAGE_PATH)
@@ -150,7 +149,6 @@ class FloatingAvatar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Burbuja de respuesta
         self.response_scroll = QScrollArea()
         self.response_scroll.setWidgetResizable(True)
         self.response_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
@@ -173,7 +171,6 @@ class FloatingAvatar(QWidget):
         self.response_scroll.hide()
         layout.addWidget(self.response_scroll, stretch=1)
 
-        # Campo de entrada
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Escribe aquí tu pregunta...")
         self.input_field.setStyleSheet("""
@@ -189,7 +186,6 @@ class FloatingAvatar(QWidget):
         self.input_field.installEventFilter(self)
         layout.addWidget(self.input_field)
 
-        # Bombilla
         self.bulb_label = QLabel("💡", self)
         self.bulb_label.setFont(QFont("Segoe UI", 24))
         self.bulb_label.setAlignment(Qt.AlignCenter)
@@ -200,7 +196,6 @@ class FloatingAvatar(QWidget):
         self.is_thinking = False
         self.eye_visible = True
         self.eyes_red = False
-
         self.movement_enabled = True
         self.user_interacting = False
         self.resizing = False
@@ -208,29 +203,24 @@ class FloatingAvatar(QWidget):
         self.resize_start_pos = None
         self.resize_start_geom = None
 
-        # Animación del cigarro
-        self.smoke_progress = 0.0          # 0=brazo abajo, 1=brazo a la boca
+        self.smoke_progress = 0.0
         self.target_smoke_progress = 0.0
         self.smoke_timer = QTimer(self)
         self.smoke_timer.timeout.connect(self._animate_smoke)
 
-        # Secuencia de caladas periódicas
         self.puff_timer = QTimer(self)
         self.puff_timer.timeout.connect(self.start_puff_sequence)
         self.puff_sequence_active = False
 
-        # Partículas de humo exhalado
         self.exhale_particles = []
 
         self.thinking_changed.connect(self._on_thinking_changed)
         self.response_ready.connect(self._on_response_ready)
 
-        # Parpadeo
         self.blink_timer = QTimer(self)
         self.blink_timer.timeout.connect(self.blink)
         self.schedule_next_blink()
 
-        # Movimiento
         self.target_pos = None
         self.move_timer = QTimer(self)
         self.move_timer.timeout.connect(self.step_towards_target)
@@ -241,7 +231,6 @@ class FloatingAvatar(QWidget):
 
         self.drag_pos = QPoint()
 
-        # Icono en bandeja
         self.tray_icon = QSystemTrayIcon(self)
         pix = QPixmap(32, 32)
         pix.fill(Qt.transparent)
@@ -264,13 +253,11 @@ class FloatingAvatar(QWidget):
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
 
-        # Timer para alertas → toast
         self.alert_timer = QTimer(self)
         self.alert_timer.timeout.connect(self.check_auto_alerts)
         self.alert_timer.start(10000)
         self.last_alert_msg = ""
 
-        # Timer para estado de conexiones
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.request_status)
         self.status_timer.start(STATUS_CHECK_INTERVAL * 1000)
@@ -281,7 +268,7 @@ class FloatingAvatar(QWidget):
         self.update_geometry()
 
     # ------------------------------------------------------------
-    # Redimensionamiento manual
+    # Redimensionamiento manual (sin cambios)
     # ------------------------------------------------------------
     def update_geometry(self):
         w = self.width()
@@ -365,7 +352,7 @@ class FloatingAvatar(QWidget):
         return edges if edges else None
 
     # ------------------------------------------------------------
-    # Toast de alertas
+    # Toast de alertas (sin cambios)
     # ------------------------------------------------------------
     def check_auto_alerts(self):
         try:
@@ -381,7 +368,7 @@ class FloatingAvatar(QWidget):
             pass
 
     # ------------------------------------------------------------
-    # Estado del sistema
+    # Estado del sistema (sin cambios)
     # ------------------------------------------------------------
     def request_status(self):
         def _ask():
@@ -410,7 +397,7 @@ class FloatingAvatar(QWidget):
         self.status_ollama.setStyleSheet(f"color: {color(status.get('ollama', False))};")
 
     # ------------------------------------------------------------
-    # Parpadeo y ojos rojos
+    # Parpadeo y ojos rojos (sin cambios)
     # ------------------------------------------------------------
     def eventFilter(self, obj, event):
         if obj == self.input_field:
@@ -439,7 +426,7 @@ class FloatingAvatar(QWidget):
         self.update()
 
     # ------------------------------------------------------------
-    # Movimiento
+    # Movimiento (sin cambios)
     # ------------------------------------------------------------
     def pick_new_destination(self):
         if not self.movement_enabled or self.user_interacting or self.resizing:
@@ -473,7 +460,7 @@ class FloatingAvatar(QWidget):
         self.move(new_x, new_y)
 
     # ------------------------------------------------------------
-    # Animación del cigarro y caladas
+    # Animación del cigarro y caladas (sin cambios)
     # ------------------------------------------------------------
     def _animate_smoke(self):
         step = 0.05
@@ -483,36 +470,28 @@ class FloatingAvatar(QWidget):
         elif self.target_smoke_progress < self.smoke_progress:
             self.smoke_progress = max(self.smoke_progress - step, self.target_smoke_progress)
             self.update()
-
-        # Actualizar partículas de exhalación
         for p in self.exhale_particles[:]:
             if not p.update():
                 self.exhale_particles.remove(p)
-
         if self.smoke_progress == self.target_smoke_progress and not self.exhale_particles:
-            # Detener el timer de animación suave si no hay cambios
             if not self.is_thinking and not self.puff_sequence_active and self.smoke_progress == 0.0:
                 self.smoke_timer.stop()
 
     def start_puff_sequence(self):
-        """Inicia una calada: subir cigarro, mantener, bajar y exhalar."""
         if not self.is_thinking or self.puff_sequence_active:
             return
         self.puff_sequence_active = True
         self.target_smoke_progress = 1.0
         if not self.smoke_timer.isActive():
             self.smoke_timer.start(30)
-        # Después de 1.5 segundos, bajar el cigarro
         QTimer.singleShot(1500, self._lower_cigar)
 
     def _lower_cigar(self):
         self.target_smoke_progress = 0.0
-        # Generar partículas de exhalación en la boca
-        mouth_x = self.avatar_width // 2 - 5  # centro aproximado de la boca
-        mouth_y = 110 + 25  # cy + mouth_y_line
+        mouth_x = self.avatar_width // 2 - 5
+        mouth_y = 110 + 25
         for _ in range(8):
             self.exhale_particles.append(ExhaleParticle(mouth_x + random.randint(-5, 5), mouth_y))
-        # La secuencia termina cuando el cigarro haya bajado (se comprueba en _animate_smoke)
         QTimer.singleShot(500, self._end_puff_sequence)
 
     def _end_puff_sequence(self):
@@ -523,7 +502,7 @@ class FloatingAvatar(QWidget):
             self.smoke_timer.start(30)
 
     # ------------------------------------------------------------
-    # Comunicación con el servidor
+    # Comunicación con el servidor (sin cambios)
     # ------------------------------------------------------------
     def send_question(self):
         text = self.input_field.text().strip()
@@ -571,11 +550,11 @@ class FloatingAvatar(QWidget):
         self.bulb_label.setVisible(state)
         if state:
             self._start_smoke_timer_if_needed()
-            self.puff_timer.start(5000)          # Calada cada 5 segundos
-            self.start_puff_sequence()           # Primera calada inmediata
+            self.puff_timer.start(5000)
+            self.start_puff_sequence()
         else:
             self.puff_timer.stop()
-            self.target_smoke_progress = 0.0     # Bajar el cigarro
+            self.target_smoke_progress = 0.0
             self._start_smoke_timer_if_needed()
             self.puff_sequence_active = False
         self.update()
@@ -604,63 +583,47 @@ class FloatingAvatar(QWidget):
         self.bulb_label.move(cx - self.bulb_label.width()//2, 30)
 
     # ------------------------------------------------------------
-    # PINTADO DE TOALLIN (South Park)
+    # PINTADO DE TOALLIN (South Park) – sin cambios
     # ------------------------------------------------------------
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
         cx = self.avatar_width // 2
-        cy = 110  # centro vertical del cuerpo de toalla
-
+        cy = 110
         if self.use_custom_image and self.pixmap:
             x = (self.avatar_width - self.pixmap.width()) // 2
             y = cy - self.pixmap.height()//2
             painter.drawPixmap(x, y, self.pixmap)
         else:
-            # ---- CUERPO (toalla blanca) ----
             toalla_w = 70
             toalla_h = 90
             painter.setBrush(QColor(255, 255, 255))
             painter.setPen(QPen(QColor(180, 180, 180), 2))
             painter.drawRoundedRect(cx - toalla_w//2, cy - toalla_h//2, toalla_w, toalla_h, 8, 8)
-
-            # Dobleces de la toalla
             pen_fold = QPen(QColor(220, 220, 220), 1)
             painter.setPen(pen_fold)
             for y_fold in range(cy - 30, cy + 30, 15):
                 painter.drawLine(cx - 30, y_fold, cx + 30, y_fold)
-
-            # ---- BRAZOS (marrón) ----
             painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
-
-            # Brazo izquierdo (fumador)
             shoulder_x = cx - 38
             shoulder_y = cy - 20
             hand_down_x = cx - 60
             hand_down_y = cy + 5
             mouth_x = cx - 8
             mouth_y = cy + 25
-
             current_hand_x = int(hand_down_x + (mouth_x - hand_down_x) * self.smoke_progress)
             current_hand_y = int(hand_down_y + (mouth_y - hand_down_y) * self.smoke_progress)
-
             painter.drawLine(shoulder_x, shoulder_y, current_hand_x, current_hand_y)
-
-            # Cigarro y humo
             if self.smoke_progress > 0.1:
                 cigar_angle = 30
                 cigar_length = 20
                 rad = math.radians(cigar_angle)
                 cigar_end_x = current_hand_x + int(cigar_length * math.cos(rad))
                 cigar_end_y = current_hand_y - int(cigar_length * math.sin(rad))
-
                 painter.setPen(QPen(QColor(200, 200, 200), 4, Qt.SolidLine, Qt.RoundCap))
                 painter.drawLine(current_hand_x, current_hand_y, cigar_end_x, cigar_end_y)
-
                 painter.setPen(QPen(QColor(255, 100, 0), 4, Qt.SolidLine, Qt.RoundCap))
                 painter.drawLine(cigar_end_x - 4, cigar_end_y + 1, cigar_end_x, cigar_end_y)
-
                 if self.smoke_progress > 0.5:
                     painter.setBrush(QColor(200, 200, 200, 100))
                     painter.setPen(Qt.NoPen)
@@ -668,28 +631,19 @@ class FloatingAvatar(QWidget):
                         px = cigar_end_x + offset[0] + random.randint(-2, 2)
                         py = cigar_end_y + offset[1] + random.randint(-2, 2)
                         painter.drawEllipse(px, py, 4, 4)
-
-            # Brazo derecho (quieto)
             painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(cx + 38, cy - 20, cx + 60, cy + 5)
             painter.drawLine(cx + 60, cy + 5, cx + 52, cy + 15)
-
-            # ---- PIERNAS ----
             painter.drawLine(cx - 10, cy + 45, cx - 15, cy + 70)
             painter.drawLine(cx + 10, cy + 45, cx + 15, cy + 70)
-
-            # ---- OJOS ----
             eye_y = cy - 20
             eye_spacing = 15
-
             if self.eye_visible:
                 eye_color = QColor(255, 60, 60) if self.eyes_red else Qt.white
                 painter.setBrush(eye_color)
                 painter.setPen(QPen(Qt.black, 3))
-
                 painter.drawEllipse(cx - eye_spacing - 12, eye_y - 14, 26, 26)
                 painter.drawEllipse(cx + eye_spacing - 12, eye_y - 14, 26, 26)
-
                 painter.setBrush(Qt.black)
                 painter.drawEllipse(cx - eye_spacing - 3, eye_y - 5, 9, 9)
                 painter.drawEllipse(cx + eye_spacing - 3, eye_y - 5, 9, 9)
@@ -697,8 +651,6 @@ class FloatingAvatar(QWidget):
                 painter.setPen(QPen(Qt.black, 3))
                 painter.drawLine(cx - eye_spacing - 14, eye_y, cx - eye_spacing + 4, eye_y)
                 painter.drawLine(cx + eye_spacing - 4, eye_y, cx + eye_spacing + 14, eye_y)
-
-            # ---- BOCA (se abre al fumar) ----
             mouth_y_line = cy + 25
             if self.is_thinking and self.smoke_progress > 0.8:
                 painter.setBrush(QColor(0, 0, 0))
@@ -707,18 +659,15 @@ class FloatingAvatar(QWidget):
             else:
                 painter.setPen(QPen(Qt.black, 2))
                 painter.drawLine(cx - 5, mouth_y_line, cx + 5, mouth_y_line)
-
-            # ---- PARTÍCULAS DE EXHALACIÓN ----
             painter.setBrush(QColor(150, 150, 150, 120))
             painter.setPen(Qt.NoPen)
             for p in self.exhale_particles:
                 painter.setOpacity(p.opacity / 255.0)
                 painter.drawEllipse(int(p.x), int(p.y), int(p.size), int(p.size))
-
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual
+    # Menú contextual (con el nuevo botón)
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -748,6 +697,8 @@ class FloatingAvatar(QWidget):
 
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
+        menu.addAction("💡 Ideas de ingresos").triggered.connect(self.show_income_ideas)  # ← NUEVO
+        menu.addSeparator()
         menu.addAction("🎯 Metas").triggered.connect(self.show_goals)
         menu.addAction("📄 Informe Semanal").triggered.connect(self.show_weekly)
         menu.addSeparator()
@@ -776,6 +727,8 @@ class FloatingAvatar(QWidget):
             self.start_query("__SPORTS__")
     def show_report(self):
         self.start_query("__REPORT__")
+    def show_income_ideas(self):               # ← NUEVO MÉTODO
+        self.start_query("__INCOME_IDEAS__")
     def show_history(self):
         self.start_query("__HISTORY__")
     def show_goals(self):

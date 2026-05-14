@@ -6,7 +6,7 @@ import threading
 import json
 import time
 import unicodedata
-from collections import defaultdict
+from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from config import (
     COMMUNICATION_PORT, AVATAR_ENABLED, HISTORY_LIMIT,
@@ -54,6 +54,20 @@ SYSTEM_PROMPT_CRYPTO = (
     "exclusivamente un JSON con tu predicción. No añadas texto fuera del JSON."
 )
 
+SYSTEM_PROMPT_INCOME = (
+    "Eres un asesor experto en generación de ingresos y emprendimiento. "
+    "Conoces todas las herramientas de este asistente virtual: análisis de criptomonedas (trading, "
+    "indicadores técnicos), predicciones deportivas (con cuotas y estadísticas), gestión empresarial "
+    "(metas, tareas, contactos) y programación en Python. "
+    "El usuario ha utilizado el asistente durante un tiempo y ahora quiere ideas para ganar dinero extra "
+    "aprovechando sus habilidades y las funcionalidades que más usa. "
+    "Analiza el resumen de uso que se te proporciona y sugiere 3 maneras concretas, realistas y "
+    "accionables de generar ingresos adicionales. Para cada idea, explica brevemente en qué consiste, "
+    "cómo puede implementarla con la ayuda del asistente y qué potencial de ganancias podría tener. "
+    "Sé específico, práctico y motivador. Responde solo con texto, sin herramientas ni funciones."
+)
+
+# ----- Caché deportivo -----
 _sports_cache_lock = threading.Lock()
 _cached_games = {}
 _cached_meta = {}
@@ -71,6 +85,7 @@ def _refresh_sports_cache():
             print(f"Error refrescando cache deportivo: {e}")
         time.sleep(SPORTS_REFRESH_INTERVAL)
 
+
 def recv_exactly(conn, n):
     buf = b""
     while len(buf) < n:
@@ -80,10 +95,12 @@ def recv_exactly(conn, n):
         buf += chunk
     return buf
 
+
 def direct_ollama_query(system_prompt: str, user_prompt: str, model: str = OLLAMA_MODEL) -> str:
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
     response = ollama_client.chat(model=model, messages=messages, stream=False)
     return response["message"]["content"]
+
 
 def _extract_first_json(text: str) -> str | None:
     start = text.find('{')
@@ -115,6 +132,7 @@ def _extract_first_json(text: str) -> str | None:
             except:
                 pass
     return None
+
 
 def format_sports_predictions(predictions_json: str, games_data: list = None) -> str:
     clean_json = _extract_first_json(predictions_json)
@@ -154,6 +172,7 @@ def format_sports_predictions(predictions_json: str, games_data: list = None) ->
     except json.JSONDecodeError:
         return predictions_json
 
+
 def get_system_status() -> str:
     ollama_ok = False
     try:
@@ -165,12 +184,79 @@ def get_system_status() -> str:
     espn_ok = is_espn_available()
     return json.dumps({"ollama": ollama_ok, "binance": binance_ok, "espn": espn_ok})
 
+
+def analyze_usage_history(history: list) -> str:
+    """
+    Analiza el historial de conversación y devuelve un resumen de uso.
+    """
+    if not history:
+        return "No hay suficiente historial de uso para generar sugerencias personalizadas."
+
+    # Contar tipos de interacciones
+    usage_counter = Counter()
+    topics = Counter()
+
+    for msg in history:
+        content = msg.get("content", "")
+        role = msg.get("role", "")
+
+        if role == "user":
+            content_lower = content.lower()
+            # Detectar marcadores especiales
+            if "📰 noticias del día" in content_lower or "noticias" in content_lower:
+                usage_counter["análisis de criptomonedas (noticias)"] += 1
+                topics["criptomonedas"] += 1
+            elif "₿ análisis" in content_lower or "bitcoin" in content_lower or "cripto" in content_lower:
+                usage_counter["análisis individual de criptomonedas"] += 1
+                topics["criptomonedas"] += 1
+            elif "🏈" in content_lower or "deporte" in content_lower or "fútbol" in content_lower or "nba" in content_lower:
+                usage_counter["predicciones deportivas"] += 1
+                topics["deportes"] += 1
+            elif "🎯 metas" in content_lower or "meta" in content_lower or "objetivo" in content_lower:
+                usage_counter["gestión de metas"] += 1
+                topics["productividad"] += 1
+            elif "📄 informe" in content_lower or "semanal" in content_lower:
+                usage_counter["informes semanales"] += 1
+                topics["productividad"] += 1
+            elif "📜 historial" in content_lower:
+                usage_counter["consulta de historial"] += 1
+            elif "tarea" in content_lower or "recordatorio" in content_lower:
+                usage_counter["gestión de tareas"] += 1
+                topics["productividad"] += 1
+            elif "código" in content_lower or "python" in content_lower or "programar" in content_lower:
+                usage_counter["programación Python"] += 1
+                topics["desarrollo"] += 1
+            else:
+                usage_counter["consultas generales"] += 1
+
+    # Construir resumen
+    summary_lines = [
+        "Resumen de uso del asistente:",
+        f"- Total de interacciones analizadas: {len([m for m in history if m['role'] == 'user'])}",
+    ]
+
+    if usage_counter:
+        summary_lines.append("\nFrecuencia de uso por funcionalidad:")
+        for func, count in usage_counter.most_common(10):
+            summary_lines.append(f"  - {func}: {count} veces")
+
+    if topics:
+        summary_lines.append("\nÁreas de interés principales:")
+        for topic, count in topics.most_common(5):
+            summary_lines.append(f"  - {topic}: {count} interacciones")
+
+    summary_lines.append(f"\nÚltima interacción: {history[-1]['content'][:100]}...")
+
+    return "\n".join(summary_lines)
+
+
 def handle_client(conn, addr):
     try:
         raw_len = recv_exactly(conn, 4)
         (msg_len,) = struct.unpack("!I", raw_len)
         user_input = recv_exactly(conn, msg_len).decode("utf-8").strip()
         print(f"Pregunta recibida del avatar: {user_input}")
+
         history = load_recent_history(HISTORY_LIMIT)
 
         if user_input.startswith("__NEWS__"):
@@ -286,7 +372,6 @@ def handle_client(conn, addr):
                     teams = pred["teams"]
                     if result and result.get("winner"):
                         real_winner = result["winner"]
-                        # Normalizar nombres para comparación
                         norm_pred = normalize_text(predicted)
                         norm_real = normalize_text(real_winner)
                         if norm_pred and norm_real and norm_pred == norm_real:
@@ -400,6 +485,22 @@ def handle_client(conn, addr):
         elif user_input.startswith("__STATUS__"):
             response = get_system_status()
 
+        elif user_input.startswith("__INCOME_IDEAS__"):
+            # Cargar historial amplio para analizar patrones de uso
+            full_history = load_recent_history(limit=100)
+            usage_summary = analyze_usage_history(full_history)
+            income_prompt = (
+                f"A continuación se muestra un resumen del uso que el usuario ha hecho de su asistente virtual:\n\n"
+                f"{usage_summary}\n\n"
+                "Basándote en esta información, sugiere 3 maneras concretas de generar ingresos extra "
+                "aprovechando las funcionalidades que más utiliza y sus áreas de interés. "
+                "Sé específico, realista y motivador."
+            )
+            response = direct_ollama_query(SYSTEM_PROMPT_INCOME, income_prompt, model=OLLAMA_MODEL)
+            save_message("user", "💡 Ideas de ingresos")
+            save_message("assistant", response)
+            print(f"Respuesta (ingresos): {response[:100]}...")
+
         else:
             response, updated_history = process_user_message(user_input, history)
             num_old = len(history)
@@ -423,6 +524,7 @@ def handle_client(conn, addr):
     finally:
         conn.close()
 
+
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -432,6 +534,7 @@ def start_server():
     while True:
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+
 
 def main():
     print("Iniciando asistente virtual...")
