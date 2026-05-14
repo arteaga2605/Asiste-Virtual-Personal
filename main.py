@@ -6,6 +6,7 @@ import threading
 import json
 import time
 import unicodedata
+import os
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from config import (
@@ -13,7 +14,8 @@ from config import (
     OLLAMA_MODEL, OLLAMA_TRADING_MODEL, OLLAMA_SPORTS_MODEL,
     OLLAMA_HOST, SPORTS_REFRESH_INTERVAL,
     TRELLO_API_KEY, TRELLO_TOKEN,
-    TRELLO_BOARD_NAME, TRELLO_LIST_PENDIENTES, TRELLO_LIST_GANANCIA, TRELLO_LIST_PERDIDA
+    TRELLO_BOARD_NAME, TRELLO_LIST_PENDIENTES, TRELLO_LIST_GANANCIA, TRELLO_LIST_PERDIDA,
+    ALERT_FILE, CELEBRATION_FILE, CRYPTO_EVALUATION_INTERVAL
 )
 from tools.trading import (
     start_binance_stream, fetch_live_prices_for_news, build_news_prompt,
@@ -240,12 +242,115 @@ def analyze_usage_history(history: list) -> str:
     return "\n".join(summary_lines)
 
 
+# --------------- Evaluación de predicciones cripto (usada por hilo y reporte) ---------------
+_eval_lock = threading.Lock()
+
+def evaluate_crypto_predictions():
+    """
+    Evalúa todas las predicciones de criptomonedas no chequeadas.
+    Si han pasado más de 24h, verifica el resultado, actualiza BD, mueve tarjeta Trello
+    y devuelve una lista de dicts con los resultados nuevos.
+    """
+    new_results = []
+    try:
+        crypto_preds = get_all_crypto_predictions()
+        now = datetime.now()
+        for cp in crypto_preds:
+            if cp["checked"]:
+                continue
+            pred_time_str = cp["timestamp"]
+            try:
+                pred_time = datetime.fromisoformat(pred_time_str)
+            except:
+                continue
+            if (now - pred_time) < timedelta(hours=24):
+                continue  # aún no se cumple el plazo
+
+            symbol = cp["symbol"]
+            current_price = get_current_crypto_price(symbol)
+            if current_price is None:
+                continue
+
+            predicted_direction = cp["direction"]
+            old_price = cp["current_price"]
+            if predicted_direction == "bullish" and current_price > old_price:
+                result = "acierto"
+            elif predicted_direction == "bearish" and current_price < old_price:
+                result = "acierto"
+            else:
+                result = "fallo"
+
+            update_crypto_prediction_result(cp["id"], result)
+            _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), result, old_price, current_price)
+            new_results.append({
+                "symbol": symbol,
+                "direction": predicted_direction,
+                "result": result,
+                "old_price": old_price,
+                "new_price": current_price
+            })
+    except Exception as e:
+        print(f"Error evaluando predicciones cripto: {e}")
+    return new_results
+
+
+def _write_celebration(new_results: list, sport_results: list = None):
+    """
+    Escribe en CELEBRATION_FILE el tipo de celebración ('success', 'fail', 'mixed')
+    según los resultados nuevos.
+    """
+    if not new_results and not sport_results:
+        return
+    all_success = True
+    all_fail = True
+    for r in new_results:
+        if r["result"] == "acierto":
+            all_fail = False
+        else:
+            all_success = False
+    if sport_results:
+        for sr in sport_results:
+            if sr.get("result") == "acierto":
+                all_fail = False
+            else:
+                all_success = False
+
+    if all_success and not all_fail:
+        celebration = "success"
+    elif all_fail and not all_success:
+        celebration = "fail"
+    else:
+        celebration = "mixed"
+    try:
+        with open(CELEBRATION_FILE, "w", encoding="utf-8") as f:
+            f.write(celebration)
+    except:
+        pass
+
+
+def _write_alerts(new_crypto_results: list, new_sport_results: list = None):
+    """Escribe en ALERT_FILE mensajes de aciertos/fallos para toast."""
+    messages = []
+    for r in new_crypto_results:
+        icon = "✅" if r["result"] == "acierto" else "❌"
+        messages.append(f"{icon} Cripto {r['symbol']}: {r['direction']} (${r['old_price']:.2f} → ${r['new_price']:.2f})")
+    if new_sport_results:
+        for sr in new_sport_results:
+            icon = "✅" if sr.get("result") == "acierto" else "❌"
+            messages.append(f"{icon} Deporte {sr.get('league', '')}: {sr.get('teams', '')} → {sr.get('detail', '')}")
+    if messages:
+        try:
+            with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                f.write("\n".join(messages))
+        except:
+            pass
+
+
 def _trello_configured() -> bool:
     return bool(TRELLO_API_KEY and TRELLO_TOKEN)
 
 
 def _create_prediction_card(symbol: str, direction: str, target_price: float, current_price: float, reasoning: str, pred_id: int):
-    """Crea una tarjeta en Trello para la predicción y actualiza la BD."""
     if not _trello_configured():
         return
     try:
@@ -264,7 +369,6 @@ def _create_prediction_card(symbol: str, direction: str, target_price: float, cu
 
 
 def _handle_crypto_result_trello(pred_id: int, trello_card_id: str, result: str, old_price: float, new_price: float):
-    """Mueve la tarjeta según el resultado y añade un comentario."""
     if not _trello_configured() or not trello_card_id:
         return
     try:
@@ -278,6 +382,18 @@ def _handle_crypto_result_trello(pred_id: int, trello_card_id: str, result: str,
         add_comment(trello_card_id, TRELLO_BOARD_NAME, comment)
     except Exception as e:
         print(f"Error moviendo tarjeta Trello: {e}")
+
+
+def _auto_evaluate_loop():
+    """Hilo que evalúa predicciones cripto cada CRYPTO_EVALUATION_INTERVAL segundos."""
+    time.sleep(10)  # esperar inicio
+    while True:
+        with _eval_lock:
+            new_results = evaluate_crypto_predictions()
+            if new_results:
+                _write_alerts(new_results)
+                _write_celebration(new_results)
+        time.sleep(CRYPTO_EVALUATION_INTERVAL)
 
 
 def handle_client(conn, addr):
@@ -387,6 +503,10 @@ def handle_client(conn, addr):
             print(f"Respuesta (deportes): {response[:100]}...")
 
         elif user_input.startswith("__REPORT__"):
+            # Evaluar cripto pendientes y obtener resultados nuevos
+            with _eval_lock:
+                new_crypto_results = evaluate_crypto_predictions()
+
             all_preds = get_all_predictions()
             if not all_preds:
                 response = "No hay predicciones guardadas aún. Usa primero la opción Deporte."
@@ -395,6 +515,7 @@ def handle_client(conn, addr):
                 total_aciertos = 0
                 total_fallos = 0
                 total_pendientes = 0
+                sport_new_results = []  # para celebraciones
                 for pred in all_preds:
                     event_id = pred["event_id"]
                     sport = pred["sport"]
@@ -413,12 +534,14 @@ def handle_client(conn, addr):
                             league_stats[league]["detalles"].append(
                                 f"✅ {teams} → Predijo **{predicted}**, ganó **{real_winner}**"
                             )
+                            sport_new_results.append({"result": "acierto", "league": league, "teams": teams, "detail": f"Predijo {predicted}, ganó {real_winner}"})
                         else:
                             league_stats[league]["fallos"] += 1
                             total_fallos += 1
                             league_stats[league]["detalles"].append(
                                 f"❌ {teams} → Predijo **{predicted}**, ganó **{real_winner}**"
                             )
+                            sport_new_results.append({"result": "fallo", "league": league, "teams": teams, "detail": f"Predijo {predicted}, ganó {real_winner}"})
                     else:
                         league_stats[league]["pendientes"] += 1
                         total_pendientes += 1
@@ -439,14 +562,13 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
-            # Reporte cripto (con movimiento automático en Trello)
+            # Reporte cripto
             crypto_preds = get_all_crypto_predictions()
             response += "\n₿ **Predicciones de Criptomonedas**\n\n"
             if not crypto_preds:
                 response += "No hay predicciones de criptomonedas todavía."
             else:
-                cripto_stats = defaultdict(lambda: {"aciertos": 0, "fallos": 0, "pendientes": 0, "detalles": []})
-                now = datetime.now()
+                cripto_stats = defaultdict(lambda: {"aciertos": 0, "fallos": 0, "pendientes": 0})
                 for cp in crypto_preds:
                     symbol = cp["symbol"]
                     if cp["checked"]:
@@ -454,38 +576,27 @@ def handle_client(conn, addr):
                             cripto_stats[symbol]["aciertos"] += 1
                         else:
                             cripto_stats[symbol]["fallos"] += 1
-                        continue
-                    pred_time_str = cp["timestamp"]
-                    try:
-                        pred_time = datetime.fromisoformat(pred_time_str)
-                    except:
-                        pred_time = None
-                    if pred_time and (now - pred_time) < timedelta(hours=24):
-                        cripto_stats[symbol]["pendientes"] += 1
-                        continue
-                    current_price = get_current_crypto_price(symbol)
-                    if current_price is None:
-                        cripto_stats[symbol]["pendientes"] += 1
-                        continue
-                    predicted_direction = cp["direction"]
-                    old_price = cp["current_price"]
-                    if predicted_direction == "bullish" and current_price > old_price:
-                        update_crypto_prediction_result(cp["id"], "acierto")
-                        cripto_stats[symbol]["aciertos"] += 1
-                        _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), "acierto", old_price, current_price)
-                    elif predicted_direction == "bearish" and current_price < old_price:
-                        update_crypto_prediction_result(cp["id"], "acierto")
-                        cripto_stats[symbol]["aciertos"] += 1
-                        _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), "acierto", old_price, current_price)
                     else:
-                        update_crypto_prediction_result(cp["id"], "fallo")
-                        cripto_stats[symbol]["fallos"] += 1
-                        _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), "fallo", old_price, current_price)
+                        pred_time_str = cp["timestamp"]
+                        try:
+                            pred_time = datetime.fromisoformat(pred_time_str)
+                            now = datetime.now()
+                            if (now - pred_time) < timedelta(hours=24):
+                                cripto_stats[symbol]["pendientes"] += 1
+                            else:
+                                # Debería haberse evaluado ya, pero por si acaso
+                                cripto_stats[symbol]["pendientes"] += 1
+                        except:
+                            cripto_stats[symbol]["pendientes"] += 1
                 for symbol, stats in sorted(cripto_stats.items()):
                     response += f"**{symbol}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
                     if stats['pendientes'] > 0:
                         response += f", {stats['pendientes']} pendientes"
                     response += "\n"
+
+            # Generar alertas y celebraciones
+            _write_alerts(new_crypto_results, sport_new_results)
+            _write_celebration(new_crypto_results, sport_new_results)
 
         elif user_input.startswith("__GOALS__"):
             goals = list_goals(active_only=True)
@@ -579,8 +690,13 @@ def main():
     print("Monitor de alertas iniciado (criptos + tareas).")
     threading.Thread(target=_refresh_sports_cache, daemon=True).start()
     print("Refresco automático de datos deportivos iniciado.")
+    # Hilo de evaluación automática de cripto cada 2 horas
+    threading.Thread(target=_auto_evaluate_loop, daemon=True).start()
+    print("Evaluación automática de cripto cada 2 horas iniciada.")
+
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
+
     if AVATAR_ENABLED:
         import subprocess
         import os
@@ -590,6 +706,7 @@ def main():
             print("Avatar lanzado.")
         except Exception as e:
             print(f"No se pudo lanzar el avatar: {e}")
+
     try:
         while True:
             pass

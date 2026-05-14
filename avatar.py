@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QPropertyAnimation
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont, QBrush, QIcon
 from config import (
-    AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE,
+    AVATAR_IMAGE_PATH, THINKING_STATE_FILE, ALERT_FILE, CELEBRATION_FILE,
     COMMUNICATION_PORT, STATUS_CHECK_INTERVAL
 )
 from tools.trading import SELECTED_CRYPTO
@@ -214,6 +214,11 @@ class FloatingAvatar(QWidget):
 
         self.exhale_particles = []
 
+        # Estado de celebración
+        self.celebration = None  # 'success', 'fail', 'mixed'
+        self.celebration_timer = QTimer(self)
+        self.celebration_timer.timeout.connect(self._reset_celebration)
+
         self.thinking_changed.connect(self._on_thinking_changed)
         self.response_ready.connect(self._on_response_ready)
 
@@ -257,6 +262,11 @@ class FloatingAvatar(QWidget):
         self.alert_timer.timeout.connect(self.check_auto_alerts)
         self.alert_timer.start(10000)
         self.last_alert_msg = ""
+
+        # Timer para leer archivo de celebración
+        self.celebration_check_timer = QTimer(self)
+        self.celebration_check_timer.timeout.connect(self.check_celebration)
+        self.celebration_check_timer.start(5000)  # cada 5 segundos
 
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.request_status)
@@ -583,13 +593,46 @@ class FloatingAvatar(QWidget):
         self.bulb_label.move(cx - self.bulb_label.width()//2, 30)
 
     # ------------------------------------------------------------
-    # PINTADO DE TOALLIN (South Park) – sin cambios
+    # CELEBRACIÓN (lectura del archivo y animación)
+    # ------------------------------------------------------------
+    def check_celebration(self):
+        try:
+            if os.path.exists(CELEBRATION_FILE):
+                with open(CELEBRATION_FILE, "r", encoding="utf-8") as f:
+                    tipo = f.read().strip()
+                if tipo and tipo != self.celebration:
+                    self.celebration = tipo
+                    self.celebration_timer.start(10000)  # 10 segundos
+                    self.update()
+                # Eliminar archivo para no repetir
+                os.remove(CELEBRATION_FILE)
+        except Exception:
+            pass
+
+    def _reset_celebration(self):
+        self.celebration = None
+        self.celebration_timer.stop()
+        self.update()
+
+    # ------------------------------------------------------------
+    # PINTADO DE TOALLIN (South Park) – con colores de celebración
     # ------------------------------------------------------------
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         cx = self.avatar_width // 2
         cy = 110
+
+        # Color base del cuerpo según celebración
+        if self.celebration == 'success':
+            body_color = QColor(100, 220, 100)  # verde
+        elif self.celebration == 'fail':
+            body_color = QColor(220, 100, 100)  # rojo
+        elif self.celebration == 'mixed':
+            body_color = QColor(255, 165, 0)   # naranja
+        else:
+            body_color = QColor(255, 255, 255)  # blanco normal
+
         if self.use_custom_image and self.pixmap:
             x = (self.avatar_width - self.pixmap.width()) // 2
             y = cy - self.pixmap.height()//2
@@ -597,13 +640,17 @@ class FloatingAvatar(QWidget):
         else:
             toalla_w = 70
             toalla_h = 90
-            painter.setBrush(QColor(255, 255, 255))
+            painter.setBrush(body_color)
             painter.setPen(QPen(QColor(180, 180, 180), 2))
             painter.drawRoundedRect(cx - toalla_w//2, cy - toalla_h//2, toalla_w, toalla_h, 8, 8)
+
+            # Dobleces
             pen_fold = QPen(QColor(220, 220, 220), 1)
             painter.setPen(pen_fold)
             for y_fold in range(cy - 30, cy + 30, 15):
                 painter.drawLine(cx - 30, y_fold, cx + 30, y_fold)
+
+            # Brazos y cigarro (sin cambios)
             painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
             shoulder_x = cx - 38
             shoulder_y = cy - 20
@@ -631,11 +678,15 @@ class FloatingAvatar(QWidget):
                         px = cigar_end_x + offset[0] + random.randint(-2, 2)
                         py = cigar_end_y + offset[1] + random.randint(-2, 2)
                         painter.drawEllipse(px, py, 4, 4)
+
+            # Brazo derecho y piernas
             painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(cx + 38, cy - 20, cx + 60, cy + 5)
             painter.drawLine(cx + 60, cy + 5, cx + 52, cy + 15)
             painter.drawLine(cx - 10, cy + 45, cx - 15, cy + 70)
             painter.drawLine(cx + 10, cy + 45, cx + 15, cy + 70)
+
+            # Ojos
             eye_y = cy - 20
             eye_spacing = 15
             if self.eye_visible:
@@ -651,23 +702,40 @@ class FloatingAvatar(QWidget):
                 painter.setPen(QPen(Qt.black, 3))
                 painter.drawLine(cx - eye_spacing - 14, eye_y, cx - eye_spacing + 4, eye_y)
                 painter.drawLine(cx + eye_spacing - 4, eye_y, cx + eye_spacing + 14, eye_y)
+
+            # Boca según celebración
             mouth_y_line = cy + 25
-            if self.is_thinking and self.smoke_progress > 0.8:
-                painter.setBrush(QColor(0, 0, 0))
-                painter.setPen(QPen(Qt.black, 1))
-                painter.drawEllipse(cx - 3, mouth_y_line - 2, 6, 6)
-            else:
+            if self.celebration == 'success':
+                # Sonrisa amplia
+                painter.setPen(QPen(Qt.black, 2))
+                painter.drawArc(cx - 8, mouth_y_line - 4, 16, 12, 0, -180 * 16)
+            elif self.celebration == 'fail':
+                # Fruncido
+                painter.setPen(QPen(Qt.black, 2))
+                painter.drawArc(cx - 8, mouth_y_line + 2, 16, 10, 0, 180 * 16)
+            elif self.celebration == 'mixed':
                 painter.setPen(QPen(Qt.black, 2))
                 painter.drawLine(cx - 5, mouth_y_line, cx + 5, mouth_y_line)
+            else:
+                if self.is_thinking and self.smoke_progress > 0.8:
+                    painter.setBrush(QColor(0, 0, 0))
+                    painter.setPen(QPen(Qt.black, 1))
+                    painter.drawEllipse(cx - 3, mouth_y_line - 2, 6, 6)
+                else:
+                    painter.setPen(QPen(Qt.black, 2))
+                    painter.drawLine(cx - 5, mouth_y_line, cx + 5, mouth_y_line)
+
+            # Partículas de exhalación
             painter.setBrush(QColor(150, 150, 150, 120))
             painter.setPen(Qt.NoPen)
             for p in self.exhale_particles:
                 painter.setOpacity(p.opacity / 255.0)
                 painter.drawEllipse(int(p.x), int(p.y), int(p.size), int(p.size))
+
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual (con Trello)
+    # Menú contextual (con Trello y demás opciones)
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -695,7 +763,6 @@ class FloatingAvatar(QWidget):
         sports_menu.addAction("Solo hockey (NHL)").triggered.connect(lambda: self.show_sports_analysis("hockey"))
         menu.addMenu(sports_menu)
 
-        # Submenú Trello
         trello_menu = QMenu("📋 Trello", self)
         trello_menu.addAction("Listar tableros").triggered.connect(self.show_trello_boards)
         trello_menu.addAction("Listar listas").triggered.connect(self.show_trello_lists)
@@ -744,7 +811,6 @@ class FloatingAvatar(QWidget):
     def show_weekly(self):
         self.start_query("__WEEKLY__")
 
-    # Trello
     def show_trello_boards(self):
         self.start_query("__TRELLO__:list_boards")
     def show_trello_lists(self):

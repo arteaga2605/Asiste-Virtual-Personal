@@ -8,35 +8,40 @@
    conexión a las APIs públicas de Binance y ESPN). Usa Ollama como motor de
    lenguaje natural y ofrece áreas de especialización: trading/análisis de
    mercado (criptomonedas), pronóstico deportivo, gestión empresarial y
-   programación en Python. La interfaz gráfica es un avatar animado con burbuja
-   de chat, campo de entrada de texto, indicadores visuales y menú contextual.
+   programación en Python. La interfaz gráfica es un avatar animado (Toallin de
+   South Park) con burbuja de chat, campo de entrada de texto, indicadores
+   visuales, menú contextual y notificaciones toast.
 
 2. ESTRUCTURA DEL PROYECTO
    asistente_virtual/
-   ├── config.py             # Configuración global (rutas, puertos, modelos)
-   ├── main.py               # Servidor de IA (socket, Ollama, alertas, caché)
-   ├── agent.py              # Agente conversacional con tool calling
-   ├── avatar.py             # Avatar animado + interfaz completa (PyQt5)
-   ├── requirements.txt      # Dependencias de Python
-   ├── DOCUMENTACION.txt     # Este archivo
+   ├── .env.example         # Plantilla para variables de entorno
+   ├── .gitignore           # Archivos y carpetas excluidas del repositorio
+   ├── config.py            # Configuración global (rutas, puertos, modelos)
+   ├── main.py              # Servidor de IA (socket, Ollama, alertas, caché)
+   ├── agent.py             # Agente conversacional con tool calling
+   ├── avatar.py            # Avatar animado + interfaz completa (PyQt5)
+   ├── requirements.txt     # Dependencias de Python
+   ├── DOCUMENTACION.txt    # Este archivo
    ├── tools/
-   │   ├── trading.py        # Herramientas de trading (indicadores, stream
-   │   │                       Binance, análisis multi‑timeframe)
-   │   ├── business.py       # Gestión empresarial (notas, tareas, contactos)
-   │   ├── code_executor.py  # Ejecución segura de código Python
-   │   ├── memory.py         # Memoria conversacional persistente (SQLite)
-   │   ├── sports.py         # Pronóstico deportivo (ESPN, resultados)
-   │   ├── predictions.py    # Almacén y consulta de predicciones deportivas
-   │   └── alerts.py         # Monitor automático de alertas (RSI, rupturas)
-   ├── data/                 # Archivos CSV históricos y base de datos SQLite
+   │   ├── trading.py       # Herramientas de trading (indicadores, stream
+   │   │                      Binance, análisis multi‑timeframe)
+   │   ├── business.py      # Gestión empresarial (notas, tareas, metas)
+   │   ├── code_executor.py # Ejecución segura de código Python
+   │   ├── memory.py        # Memoria conversacional persistente (SQLite)
+   │   ├── sports.py        # Pronóstico deportivo (ESPN, resultados)
+   │   ├── predictions.py   # Almacén y consulta de predicciones
+   │   ├── alerts.py        # Monitor automático de alertas (RSI, SMA)
+   │   └── trello.py        # Integración con Trello
+   ├── data/                # Base de datos SQLite (excluida del repo)
    └── assets/
-       └── avatar.png        # Imagen personalizada opcional para el avatar
+       └── avatar.png       # Imagen personalizada opcional (excluida del repo)
 
 3. REQUISITOS
    - Python 3.10 o superior.
    - Ollama instalado y corriendo (https://ollama.com).
-   - Modelos descargados (llama3.1, codellama, 📈 Modelo para trading de criptomonedas deepseek-r1:8b⚽ Modelo para deportes qwen3:8b).
+   - Modelos descargados (llama3.1, deepseek-r1, qwen3, etc.).
    - Paquetes Python listados en requirements.txt.
+   - (Opcional) Cuenta de Trello y credenciales para la integración.
 
 4. INSTALACIÓN Y PUESTA EN MARCHA
    1. Clona o copia los archivos a una carpeta.
@@ -47,151 +52,148 @@
         Linux/Mac: source venv/bin/activate
    4. Instala dependencias:
         pip install -r requirements.txt
-   5. Asegúrate de que Ollama está corriendo y has descargado los modelos:
+   5. Configura las variables de entorno:
+        - Copia .env.example a .env
+        - Edita .env con tus credenciales de Trello (si las usas) y ajusta
+          cualquier otra variable según prefieras.
+   6. Asegúrate de que Ollama está corriendo y has descargado los modelos:
         ollama pull llama3.1:latest
-        ollama pull codellama:latest
-   6. (Opcional) Coloca archivos CSV históricos en la carpeta data/.
-        Formato esperado: columnas Date,Open,High,Low,Close,Volume.
-   7. (Opcional) Coloca una imagen PNG con transparencia en assets/avatar.png.
-   8. Ejecuta el servidor:
+        ollama pull deepseek-r1:8b
+        ollama pull qwen3:8b
+   7. (Opcional) Coloca archivos CSV históricos en la carpeta data/.
+   8. (Opcional) Coloca una imagen PNG con transparencia en assets/avatar.png.
+   9. Ejecuta el servidor:
         python main.py
-   9. El avatar aparecerá en el escritorio; escribe preguntas en su campo de
-      texto y pulsa Enter.
+   10. El avatar aparecerá en el escritorio; escribe preguntas en su campo de
+       texto y pulsa Enter.
 
-5. ARQUITECTURA Y FLUJO DE DATOS
+5. MODELOS DE IA UTILIZADOS
+   - Chat general y conversación: llama3.1:latest (8B parámetros, ~5 GB)
+   - Trading / criptomonedas: deepseek-r1:8b (razonamiento financiero)
+   - Deportes: qwen3:8b (razonamiento multilingüe)
+   - Código Python: codellama:latest
+   - Respaldo rápido: phi3:mini
+
+6. ARQUITECTURA Y FLUJO DE DATOS
    - El usuario escribe en el avatar (PyQt5). El avatar envía la pregunta a
      través de un socket TCP al servidor (main.py) usando un protocolo de
      longitud prefijada (4 bytes big-endian + mensaje).
    - El servidor recibe la pregunta y, dependiendo del prefijo (__NEWS__,
-     __SPORTS__, __REPORT__, __HISTORY__), ejecuta flujos especializados o
-     llama al agente normal (agent.py).
+     __SPORTS__, __CRYPTO__, __REPORT__, __HISTORY__, etc.), ejecuta flujos
+     especializados o llama al agente normal (agent.py).
    - El agente normal (para consultas generales) utiliza tool calling con
-     Ollama (modelo Llama 3.1) y puede invocar herramientas de trading,
-     gestión o ejecución de código.
-   - Las consultas especiales (noticias, deportes) usan prompts y system
-     prompts dedicados sin herramientas.
+     Ollama (modelo llama3.1) y puede invocar herramientas de trading,
+     gestión, Trello o ejecución de código.
+   - Las consultas especiales (noticias, deportes, cripto) usan prompts y
+     modelos dedicados (deepseek‑r1 para trading, qwen3 para deportes).
    - La respuesta se envía de vuelta al avatar y se muestra en la burbuja de
      chat.
-   - Todos los mensajes (usuario y asistente) se guardan en una base de datos
-     SQLite (tabla conversation_history), lo que permite memoria persistente.
-   - El avatar posee animaciones independientes: movimiento aleatorio por la
-     pantalla (pausable al escribir), parpadeo, bombilla sobre la cabeza
-     cuando "piensa", y un icono en la bandeja del sistema.
-   - Un hilo de monitorización revisa continuamente el mercado de Binance y
-     envía alertas automáticas al avatar si se detectan condiciones de interés
-     (RSI < 30 o ruptura de niveles).
+   - Todos los mensajes se guardan en una base de datos SQLite (tabla
+     conversation_history), lo que permite memoria persistente.
+   - El avatar posee animaciones: movimiento aleatorio (pausable al escribir),
+     parpadeo, bombilla sobre la cabeza al pensar, cigarro y humo durante el
+     procesamiento, y colores/expresiones de celebración por aciertos/fallos.
+   - Un hilo de monitorización revisa el mercado de Binance y envía alertas
+     toast al avatar si se detectan condiciones de interés.
+   - Un hilo de evaluación automática revisa las predicciones de criptomonedas
+     cada 2 horas y actualiza las tarjetas de Trello.
 
-6. COMPONENTES PRINCIPALES
+7. COMPONENTES PRINCIPALES
    - config.py:
      Contiene rutas, puerto de comunicación, modelos de Ollama, intervalo de
      refresco deportivo (45 min), límite de historial y variables de entorno.
    - agent.py:
      Define las herramientas disponibles (según el estándar de OpenAI
-     functions) y el system prompt. La función process_user_message() maneja el
-     ciclo de tool calling y devuelve la respuesta final.
+     functions) y el system prompt. Incluye herramientas de Trello.
    - tools/trading.py:
      Funciones para cargar CSV históricos, calcular indicadores (RSI, SMA, EMA,
-     MACD), mantener precios en vivo vía WebSocket de Binance, obtener las 50
-     monedas con mayor volumen (excluyendo stablecoins) y calcular RSI en tres
-     marcos temporales (1h, 4h, 1d).
+     MACD), mantener precios en vivo vía WebSocket de Binance, obtener las
+     monedas seleccionadas y calcular RSI en tres marcos temporales.
    - tools/business.py:
-     Gestión de base de datos SQLite con tablas para notas, tareas y contactos.
-     Operaciones CRUD básicas.
+     Gestión de base de datos SQLite con tablas para notas, tareas, contactos
+     y metas. Incluye seguimiento de objetivos y generación de informes.
    - tools/code_executor.py:
      Ejecuta código Python arbitrario en un subproceso aislado con timeout.
    - tools/memory.py:
-     Gestiona la tabla conversation_history (almacena los mensajes en SQLite) y
-     permite cargar el historial reciente (últimos 20 o 100 mensajes).
+     Gestiona la tabla conversation_history y permite cargar el historial.
    - tools/sports.py:
-     Consulta la API pública de ESPN para obtener partidos del día en 16 ligas
-     (NBA, NFL, MLB, NHL, Premier League, La Liga, Bundesliga, Serie A, Ligue 1,
-     Eredivisie, Scottish Premiership, MLS, Liga MX, Saudi Pro League,
-     Spanish Liga F, A-League Women). Prioriza los partidos de hoy y, si no hay
-     suficientes, completa con encuentros futuros. También obtiene el resultado
-     de partidos finalizados para el reporte de aciertos.
+     Consulta la API pública de ESPN para obtener partidos del día en 16 ligas.
+     Prioriza los de hoy y enriquece con estadísticas avanzadas.
    - tools/predictions.py:
-     Almacena las predicciones generadas por el LLM (junto con el evento,
-     liga, equipos y favorito) en la tabla predictions. Impide duplicados
-     (por event_id) y proporciona todas las predicciones para el reporte.
+     Almacena predicciones deportivas y de criptomonedas. Incluye filtro de
+     confianza mínima (50%) y gestión de tarjetas Trello.
    - tools/alerts.py:
-     Monitoriza periódicamente (cada 5 min) las 20 monedas principales.
-     Escribe un archivo temporal si detecta RSI(1h) < 30 o si el precio rompe
-     el máximo o mínimo de 24h. El avatar lee este archivo y muestra la alerta.
+     Monitoriza las criptomonedas seleccionadas y tareas próximas. Genera
+     alertas toast y recordatorios.
+   - tools/trello.py:
+     Funciones para listar tableros, listas, tarjetas, crear tarjetas, moverlas
+     y añadir comentarios mediante py-trello.
    - main.py (servidor):
-     Inicia el stream de Binance, el monitor de alertas, el refresco
-     automático de datos deportivos (cada 45 min) y el servidor TCP.
-     Maneja los prefijos especiales:
-       __NEWS__   → Análisis de criptomonedas (multi‑timeframe)
-       __SPORTS__ → Predicciones deportivas (usa caché fresco)
-       __REPORT__ → Reporte de aciertos/fallos por liga
+     Inicia el stream de Binance, el monitor de alertas, el refresco de datos
+     deportivos, la evaluación automática de cripto cada 2 horas y el servidor
+     TCP. Maneja los prefijos especiales:
+       __NEWS__   → Joyas ocultas cripto (deepseek‑r1)
+       __CRYPTO__ → Análisis individual o de todas las criptos
+       __SPORTS__ → Predicciones deportivas (qwen3, con confianza)
+       __REPORT__ → Reporte de aciertos/fallos y celebración
        __HISTORY__→ Historial de conversación
+       __INCOME_IDEAS__ → Ideas de ingresos personalizadas
    - avatar.py (cliente gráfico):
      Ventana transparente siempre visible. Contiene:
-       - Área de dibujo del avatar (imagen personalizada o dibujo vectorial).
+       - Avatar de Toallin con animaciones (cigarro, humo, colores).
        - Burbuja de respuesta (QTextEdit con scroll).
        - Campo de entrada de texto.
        - Bombilla de "pensando".
        - Movimiento autónomo aleatorio (pausable al escribir).
-       - Menú contextual: (No) caminar, Noticias del día, Deporte, Reporte,
-         Historial, Ocultar avatar, Expandir/Esconder burbuja.
+       - Menú contextual: (No) caminar, submenús de Criptomonedas, Deporte,
+         Trello, Reporte, Ideas de ingresos, Metas, Informe Semanal,
+         Historial, Ocultar, Expandir/Esconder burbuja.
        - Icono en la bandeja del sistema.
-       - Timer que revisa alertas automáticas cada 10 segundos.
+       - Notificaciones toast para alertas y celebraciones.
+       - Celebración visual (colores verde/rojo/naranja) al acertar/fallar.
 
-7. FUNCIONAMIENTO DE LAS OPCIONES DEL MENÚ CONTEXTUAL
+8. FUNCIONAMIENTO DE LAS OPCIONES DEL MENÚ CONTEXTUAL
    - 🛑 No caminar / 🚶 Caminar: Pausa o reanuda el movimiento del avatar.
-   - 📰 Noticias del día: Ejecuta un análisis de criptomonedas en tiempo real.
-     Descarga las 50 monedas con mayor volumen de Binance (excluyendo
-     stablecoins), calcula RSI en velas de 1h, 4h y 1d, y pide al modelo que
-     elija 3 joyas ocultas explicando por qué.
-   - 🏈 Deporte: Obtiene los próximos partidos de todas las ligas configuradas
-     (prioriza los de hoy) y solicita al LLM que genere un JSON con los
-     equipos favoritos. Las predicciones se guardan para el reporte.
-   - 📊 Reporte: Compara las predicciones guardadas con los resultados reales
-     (usando la API de ESPN) y muestra aciertos/fallos, tanto totales como
-     desglosados por liga.
-   - 📜 Historial: Muestra los últimos 100 mensajes de la conversación
-     (preguntas del usuario, respuestas del asistente y llamadas a
-     herramientas) en la burbuja.
-   - 👻 Ocultar avatar: Minimiza el avatar a la bandeja del sistema.
-   - ⬆️ Expandir burbuja: Aumenta la altura máxima de la burbuja en 100 px
-     (hasta un máximo de 500 px). La ventana se redimensiona adecuadamente.
-   - ❌ Esconder burbuja: Oculta la burbuja de respuesta. Vuelve a aparecer al
-     recibir una nueva respuesta.
+   - ₿ Criptomonedas: Submenú con análisis individual de cada moneda y
+     "Todas las criptos". Crea tarjeta en Trello automáticamente.
+   - 📰 Noticias del día: Busca 3 joyas ocultas entre las criptos configuradas.
+   - 🏈 Deporte: Submenú con filtros por liga. Predice favoritos, marcador y
+     confianza. Guarda las predicciones para el reporte.
+   - 📋 Trello: Submenú para listar tableros, listas, tarjetas y crear tarjetas.
+   - 📊 Reporte: Muestra aciertos/fallos de deportes y criptomonedas. Evalúa
+     predicciones pendientes y actualiza Trello.
+   - 💡 Ideas de ingresos: Analiza el historial de uso y sugiere formas de
+     ganar dinero extra.
+   - 🎯 Metas: Lista las metas activas.
+   - 📄 Informe Semanal: Tareas completadas, notas nuevas, metas.
+   - 📜 Historial: Últimas 100 interacciones.
+   - 👻 Ocultar avatar: Minimiza a la bandeja del sistema.
+   - ⬆️ Expandir burbuja: Aumenta la altura de la ventana.
+   - ❌ Esconder burbuja: Oculta el área de respuesta.
 
-8. ALERTAS AUTOMÁTICAS
-   - Un hilo en background monitoriza las 20 principales criptomonedas cada
-     5 minutos.
-   - Condiciones de alerta:
-       * RSI(1h) de 14 periodos por debajo de 30.
-       * Precio actual > máximo de 24h + 0.1%.
-       * Precio actual < mínimo de 24h - 0.1%.
-   - Si se cumple alguna, se escribe un archivo temporal y el avatar muestra
-     el mensaje en la burbuja automáticamente (sin intervención del usuario).
+9. ALERTAS AUTOMÁTICAS Y CELEBRACIONES
+   - Monitor de criptomonedas cada 10 min: RSI 1 semana y 1 mes (>70 o <30),
+     precio tocando SMA 9 en 4H, 1D, 1 semana y 1 mes.
+   - Recordatorios de tareas próximas (24h).
+   - Evaluación automática de predicciones cripto cada 2 horas.
+   - Al acertar o fallar predicciones, el avatar cambia de color durante
+     10 segundos (verde=acierto, rojo=fallo, naranja=mixto) y muestra
+     notificaciones toast.
 
-9. MEMORIA CONVERSACIONAL PERSISTENTE
-   - Cada mensaje del usuario, respuesta del asistente y mensajes de
-     herramienta se guardan en la tabla conversation_history de SQLite.
-   - Al iniciar una conversación normal, se cargan los últimos 20 mensajes
-     como contexto para el modelo.
-   - La opción "Historial" del menú carga los últimos 100 mensajes y los
-     muestra en la burbuja.
+10. INTEGRACIÓN CON TRELLO
+    - Requiere configurar TRELLO_API_KEY y TRELLO_TOKEN en el archivo .env.
+    - Al hacer un análisis de criptomonedas, se crea automáticamente una
+      tarjeta en la lista "Pendientes" del tablero "Crypto Predicciones".
+    - Al evaluar la predicción (≥24h), la tarjeta se mueve a "Ganancia" o
+      "Pérdida" con un comentario del resultado.
+    - También puedes gestionar Trello manualmente desde el chat o el menú.
 
-10. ACTUALIZACIÓN AUTOMÁTICA DE PARTIDOS
-    - Un hilo en segundo plano ejecuta fetch_sports_data() cada 45 minutos y
-      guarda los resultados en una caché.
-    - Al elegir "Deporte", se usan los datos ya cacheados, evitando esperas
-      adicionales y garantizando que siempre se analicen los partidos más
-      recientes.
-
-11. PERSONALIZACIÓN Y MEJORAS POSIBLES
-    - Cambiar el modelo: en config.py, modifica OLLAMA_MODEL (p.ej. "phi3:mini").
-    - Añadir más herramientas: en agent.py añade una entrada en TOOLS y su
-      función correspondiente en el FUNCTION_MAP.
-    - Modificar las ligas monitorizadas: edita SPORTS_CONFIG en tools/sports.py.
-    - Ajustar el universo de monedas: cambia el valor de 'limit' en la llamada
-      a fetch_live_prices_for_news() en main.py.
-    - Añadir reconocimiento de voz o interfaz web: se puede hacer con
-      SpeechRecognition o Streamlit sin alterar la lógica central.
+11. PERSONALIZACIÓN
+    - Cambiar el modelo: edita .env o config.py (OLLAMA_MODEL, etc.).
+    - Añadir más monedas: edita SELECTED_CRYPTO en tools/trading.py.
+    - Modificar las ligas deportivas: edita SPORTS_CONFIG en tools/sports.py.
+    - Ajustar intervalos: CRYPTO_EVALUATION_INTERVAL, SPORTS_REFRESH_INTERVAL,
+      etc. en config.py.
 
 12. SOLUCIÓN DE PROBLEMAS COMUNES
     - Error "timed out" en el avatar: aumenta el timeout del socket en
@@ -205,8 +207,9 @@
     - El reporte muestra "0 aciertos, 0 fallos": espera a que los partidos
       finalicen; el sistema consulta el estado real desde ESPN.
     - Alertas no aparecen: verifica que el archivo ALERT_FILE se escribe y que
-      el hilo de alertas no se ha detenido. Aumenta el intervalo si la API de
-      Binance está limitando las peticiones.
+      el hilo de alertas no se ha detenido.
+    - Error de Trello: comprueba que el archivo .env tiene las credenciales
+      correctas y que el tablero y las listas existen.
 
 ================================================================================
                         FIN DE LA DOCUMENTACIÓN

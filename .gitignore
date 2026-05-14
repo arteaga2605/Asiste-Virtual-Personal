@@ -1,0 +1,46 @@
+# Entorno virtual
+venv/
+env/
+.venv/
+
+# Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Base de datos SQLite
+data/business.db
+
+# Archivos de datos históricos (opcional)
+data/*.csv
+
+# Variables de entorno (contiene claves secretas)
+.env
+
+# Archivos de configuración locales
+*.local
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos temporales
+*.log
+*.tmp
+
+# Imagen personalizada (opcional)
+assets/avatar.png
+
+# Archivo de estado (temporal)
+asistente_thinking.txt
+asistente_alert.txt
+asistente_celebration.txt
