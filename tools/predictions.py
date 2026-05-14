@@ -1,7 +1,7 @@
 # tools/predictions.py
 import sqlite3
 import json
-from datetime import datetime
+import unicodedata
 from config import BUSINESS_DB_PATH
 
 def init_predictions():
@@ -29,7 +29,6 @@ def init_predictions():
         conn.execute("ALTER TABLE predictions ADD COLUMN confidence INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
-
     conn.execute("""
         CREATE TABLE IF NOT EXISTS crypto_predictions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,6 +45,13 @@ def init_predictions():
     conn.commit()
     conn.close()
 
+def normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    text = text.strip().lower()
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    return text
+
 def save_predictions(predictions_data: list, response_json: str, events_meta: dict):
     conn = sqlite3.connect(BUSINESS_DB_PATH)
     for pred in predictions_data:
@@ -53,11 +59,19 @@ def save_predictions(predictions_data: list, response_json: str, events_meta: di
         favorite = pred.get("favorite", "")
         score = pred.get("score", "")
         confidence = pred.get("confidence", 0)
+        # Filtrar predicciones con baja confianza (< 50)
+        try:
+            conf_int = int(confidence)
+        except:
+            conf_int = 0
+        if conf_int < 50:
+            continue  # No guardar predicciones poco fiables
         event_id = None
         sport = ""
         league = ""
         league_slug = ""
         teams_json = ""
+        # Buscar por resumen exacto
         for eid, meta in events_meta.items():
             if meta.get("summary", "") == game_name:
                 event_id = eid
@@ -66,6 +80,7 @@ def save_predictions(predictions_data: list, response_json: str, events_meta: di
                 league_slug = meta.get("league_slug", "")
                 teams_json = json.dumps(meta.get("teams", []))
                 break
+        # Respaldo: buscar por coincidencia de palabras
         if not event_id:
             for eid, meta in events_meta.items():
                 summary = meta.get("summary", "")
@@ -79,10 +94,11 @@ def save_predictions(predictions_data: list, response_json: str, events_meta: di
                     teams_json = json.dumps(meta.get("teams", []))
                     break
         if event_id:
+            # Eliminar cualquier predicción anterior del mismo event_id
             conn.execute("DELETE FROM predictions WHERE event_id = ?", (event_id,))
             conn.execute(
                 "INSERT INTO predictions (event_id, sport, league, league_slug, teams, favorite, predicted_score, confidence, response_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (event_id, sport, league, league_slug, teams_json, favorite, score, confidence, response_json)
+                (event_id, sport, league, league_slug, teams_json, favorite, score, conf_int, response_json)
             )
     conn.commit()
     conn.close()

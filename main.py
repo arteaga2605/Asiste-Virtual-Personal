@@ -5,6 +5,7 @@ import socket
 import threading
 import json
 import time
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta
 from config import (
@@ -18,7 +19,7 @@ from tools.trading import (
 )
 from tools.memory import load_recent_history, save_message
 from agent import process_user_message
-from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result, is_espn_available
+from tools.sports import fetch_sports_data, build_sports_prompt, get_event_result, is_espn_available, normalize_text
 from tools.predictions import (
     save_predictions, get_all_predictions,
     save_crypto_prediction, get_all_crypto_predictions, update_crypto_prediction_result
@@ -41,7 +42,7 @@ SYSTEM_PROMPT_SPORTS = (
     "Eres un analista deportivo experto. Recibes datos de partidos del día (ligas, equipos, "
     "cuotas, estadísticas avanzadas) y debes devolver exclusivamente un JSON con tus predicciones, "
     "sin texto adicional. El formato debe ser: "
-    '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre del equipo favorito", '
+    '{"predictions": [{"game": "RESUMEN EXACTO DEL PARTIDO", "favorite": "nombre completo del equipo", '
     '"score": "marcador estimado", "confidence": número entre 0 y 100}]}.'
     "Usa exactamente el RESUMEN que aparece en cada partido para el campo 'game'. "
     "**No devuelvas nunca una lista vacía**; debes hacer una predicción para cada partido."
@@ -53,7 +54,6 @@ SYSTEM_PROMPT_CRYPTO = (
     "exclusivamente un JSON con tu predicción. No añadas texto fuera del JSON."
 )
 
-# ----- Caché deportivo -----
 _sports_cache_lock = threading.Lock()
 _cached_games = {}
 _cached_meta = {}
@@ -71,7 +71,6 @@ def _refresh_sports_cache():
             print(f"Error refrescando cache deportivo: {e}")
         time.sleep(SPORTS_REFRESH_INTERVAL)
 
-
 def recv_exactly(conn, n):
     buf = b""
     while len(buf) < n:
@@ -81,15 +80,10 @@ def recv_exactly(conn, n):
         buf += chunk
     return buf
 
-
 def direct_ollama_query(system_prompt: str, user_prompt: str, model: str = OLLAMA_MODEL) -> str:
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
     response = ollama_client.chat(model=model, messages=messages, stream=False)
     return response["message"]["content"]
-
 
 def _extract_first_json(text: str) -> str | None:
     start = text.find('{')
@@ -122,18 +116,15 @@ def _extract_first_json(text: str) -> str | None:
                 pass
     return None
 
-
 def format_sports_predictions(predictions_json: str, games_data: list = None) -> str:
     clean_json = _extract_first_json(predictions_json)
     if clean_json is None:
         return predictions_json if predictions_json.strip() else "El modelo no devolvió una respuesta válida."
-
     try:
         data = json.loads(clean_json)
         preds = data.get("predictions", [])
         if not preds:
             return "⚠️ El modelo devolvió un JSON sin predicciones."
-
         game_names = {}
         if games_data:
             for game in games_data:
@@ -149,7 +140,6 @@ def format_sports_predictions(predictions_json: str, games_data: list = None) ->
                         else:
                             names.append(name)
                     game_names[summary] = " vs ".join(names)
-
         lines = ["🏈 **Análisis Deportivo del Día**\n"]
         for i, pred in enumerate(preds, 1):
             game_key = pred.get("game", "Partido desconocido")
@@ -164,7 +154,6 @@ def format_sports_predictions(predictions_json: str, games_data: list = None) ->
     except json.JSONDecodeError:
         return predictions_json
 
-
 def get_system_status() -> str:
     ollama_ok = False
     try:
@@ -174,9 +163,7 @@ def get_system_status() -> str:
         pass
     binance_ok = is_binance_stream_active()
     espn_ok = is_espn_available()
-    status = {"ollama": ollama_ok, "binance": binance_ok, "espn": espn_ok}
-    return json.dumps(status)
-
+    return json.dumps({"ollama": ollama_ok, "binance": binance_ok, "espn": espn_ok})
 
 def handle_client(conn, addr):
     try:
@@ -184,10 +171,8 @@ def handle_client(conn, addr):
         (msg_len,) = struct.unpack("!I", raw_len)
         user_input = recv_exactly(conn, msg_len).decode("utf-8").strip()
         print(f"Pregunta recibida del avatar: {user_input}")
-
         history = load_recent_history(HISTORY_LIMIT)
 
-        # ------------------ NOTICIAS (deepseek‑r1:8b) ------------------
         if user_input.startswith("__NEWS__"):
             coins_df = fetch_live_prices_for_news(limit=11)
             news_prompt = build_news_prompt(coins_df)
@@ -196,12 +181,10 @@ def handle_client(conn, addr):
             save_message("assistant", response)
             print(f"Respuesta (noticias): {response[:100]}...")
 
-        # ------------------ CRIPTO INDIVIDUAL / TODAS ------------------
         elif user_input.startswith("__CRYPTO__"):
             parts = user_input.split(":", 1)
             symbol = parts[1].strip() if len(parts) > 1 else "BTCUSDT"
             if symbol == "ALL":
-                # Análisis de todas las monedas
                 resultados = []
                 for sym in SELECTED_CRYPTO:
                     prompt = build_crypto_analysis_prompt(sym)
@@ -227,7 +210,6 @@ def handle_client(conn, addr):
                     time.sleep(0.5)
                 response = "₿ **Análisis de todas las criptomonedas**\n\n" + "\n\n".join(resultados)
             else:
-                # Análisis individual
                 prompt = build_crypto_analysis_prompt(symbol)
                 raw_response = direct_ollama_query(SYSTEM_PROMPT_CRYPTO, prompt, model=OLLAMA_TRADING_MODEL)
                 clean_json = _extract_first_json(raw_response)
@@ -241,7 +223,6 @@ def handle_client(conn, addr):
                             save_crypto_prediction(symbol, direction, target_price, current_price, raw_response)
                     except Exception as e:
                         print(f"No se pudo guardar la predicción de {symbol}: {e}")
-
                 try:
                     pred_json = json.loads(clean_json) if clean_json else json.loads(raw_response)
                     direction = pred_json.get("direction", "desconocida")
@@ -250,16 +231,13 @@ def handle_client(conn, addr):
                     response = f"₿ **Análisis {symbol}**\n\nDirección esperada: **{direction.upper()}**\nPrecio objetivo: ${target}\n\n{reasoning}"
                 except:
                     response = raw_response
-
-            save_message("user", f"₿ Análisis cripto")
+            save_message("user", "₿ Análisis cripto")
             save_message("assistant", response)
             print(f"Respuesta (cripto): {response[:100]}...")
 
-        # ------------------ DEPORTES (qwen3:8b) ------------------
         elif user_input.startswith("__SPORTS__"):
             parts = user_input.split(":", 1)
             category = parts[1].strip() if len(parts) > 1 else None
-
             if category is None:
                 with _sports_cache_lock:
                     games_data = _cached_games.get(None)
@@ -268,10 +246,8 @@ def handle_client(conn, addr):
                     games_data, events_meta = fetch_sports_data(category_filter=None)
             else:
                 games_data, events_meta = fetch_sports_data(category_filter=category)
-
             sports_prompt = build_sports_prompt(games_data)
             raw_response = direct_ollama_query(SYSTEM_PROMPT_SPORTS, sports_prompt, model=OLLAMA_SPORTS_MODEL)
-
             clean_json = _extract_first_json(raw_response)
             if clean_json:
                 try:
@@ -282,19 +258,16 @@ def handle_client(conn, addr):
                     else:
                         print("Predicciones vacías, no se guardan.")
                 except json.JSONDecodeError:
-                    print("No se pudo parsear la respuesta JSON del modelo. No se guardan predicciones estructuradas.")
+                    print("No se pudo parsear la respuesta JSON del modelo.")
             else:
                 print("No se encontró JSON válido en la respuesta deportiva.")
-
             formatted_response = format_sports_predictions(raw_response, games_data)
             save_message("user", f"🏈 Análisis deportivo ({category or 'todos'})")
             save_message("assistant", formatted_response)
             response = formatted_response
             print(f"Respuesta (deportes): {response[:100]}...")
 
-        # ------------------ RESTO DE OPCIONES ------------------
         elif user_input.startswith("__REPORT__"):
-            # Reporte deportivo
             all_preds = get_all_predictions()
             if not all_preds:
                 response = "No hay predicciones guardadas aún. Usa primero la opción Deporte."
@@ -303,7 +276,6 @@ def handle_client(conn, addr):
                 total_aciertos = 0
                 total_fallos = 0
                 total_pendientes = 0
-
                 for pred in all_preds:
                     event_id = pred["event_id"]
                     sport = pred["sport"]
@@ -312,10 +284,12 @@ def handle_client(conn, addr):
                     result = get_event_result(sport, league_slug, event_id)
                     predicted = pred["favorite"]
                     teams = pred["teams"]
-
                     if result and result.get("winner"):
                         real_winner = result["winner"]
-                        if predicted and real_winner and predicted.lower() == real_winner.lower():
+                        # Normalizar nombres para comparación
+                        norm_pred = normalize_text(predicted)
+                        norm_real = normalize_text(real_winner)
+                        if norm_pred and norm_real and norm_pred == norm_real:
                             league_stats[league]["aciertos"] += 1
                             total_aciertos += 1
                             league_stats[league]["detalles"].append(
@@ -333,13 +307,11 @@ def handle_client(conn, addr):
                         league_stats[league]["detalles"].append(
                             f"⏳ {teams} → Partido aún no finalizado"
                         )
-
                 response = "📊 **Reporte de predicciones**\n\n"
                 response += f"🔹 **Total general**: {total_aciertos} aciertos, {total_fallos} fallos"
                 if total_pendientes > 0:
                     response += f", {total_pendientes} pendientes"
                 response += "\n\n"
-
                 for league, stats in sorted(league_stats.items()):
                     response += f"**{league}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
                     if stats['pendientes'] > 0:
@@ -365,22 +337,18 @@ def handle_client(conn, addr):
                         else:
                             cripto_stats[symbol]["fallos"] += 1
                         continue
-
                     pred_time_str = cp["timestamp"]
                     try:
                         pred_time = datetime.fromisoformat(pred_time_str)
                     except:
                         pred_time = None
-
                     if pred_time and (now - pred_time) < timedelta(hours=24):
                         cripto_stats[symbol]["pendientes"] += 1
                         continue
-
                     current_price = get_current_crypto_price(symbol)
                     if current_price is None:
                         cripto_stats[symbol]["pendientes"] += 1
                         continue
-
                     predicted_direction = cp["direction"]
                     old_price = cp["current_price"]
                     if predicted_direction == "bullish" and current_price > old_price:
@@ -392,7 +360,6 @@ def handle_client(conn, addr):
                     else:
                         update_crypto_prediction_result(cp["id"], "fallo")
                         cripto_stats[symbol]["fallos"] += 1
-
                 for symbol, stats in sorted(cripto_stats.items()):
                     response += f"**{symbol}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
                     if stats['pendientes'] > 0:
@@ -402,7 +369,7 @@ def handle_client(conn, addr):
         elif user_input.startswith("__GOALS__"):
             goals = list_goals(active_only=True)
             if not goals:
-                response = "No tienes metas activas en este momento. Puedes añadir una usando el chat (ej. 'Añade la meta: aumentar productividad')."
+                response = "No tienes metas activas en este momento."
             else:
                 lines = ["🎯 **Metas actuales**\n"]
                 for g in goals:
@@ -456,7 +423,6 @@ def handle_client(conn, addr):
     finally:
         conn.close()
 
-
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -467,38 +433,30 @@ def start_server():
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
-
 def main():
     print("Iniciando asistente virtual...")
     start_binance_stream(SELECTED_CRYPTO)
     print("Stream Binance activo (criptos seleccionadas).")
-
     start_alert_monitor(interval_minutes=10)
     print("Monitor de alertas iniciado (criptos + tareas).")
-
     threading.Thread(target=_refresh_sports_cache, daemon=True).start()
     print("Refresco automático de datos deportivos iniciado.")
-
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()
-
     if AVATAR_ENABLED:
         import subprocess
         import os
         avatar_path = os.path.join(os.path.dirname(__file__), "avatar.py")
         try:
-            subprocess.Popen([sys.executable, avatar_path],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen([sys.executable, avatar_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             print("Avatar lanzado.")
         except Exception as e:
             print(f"No se pudo lanzar el avatar: {e}")
-
     try:
         while True:
             pass
     except KeyboardInterrupt:
         print("Cerrando servidor...")
-
 
 if __name__ == "__main__":
     main()
