@@ -17,17 +17,18 @@ def init_predictions():
             predicted_score TEXT,
             confidence INTEGER DEFAULT 0,
             response_json TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            trello_card_id TEXT,
+            checked INTEGER DEFAULT 0,
+            result TEXT
         )
     """)
-    try:
-        conn.execute("ALTER TABLE predictions ADD COLUMN predicted_score TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE predictions ADD COLUMN confidence INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+    # Añadir columnas si no existen (para bases de datos antiguas)
+    for col in ["predicted_score", "confidence", "trello_card_id", "checked", "result"]:
+        try:
+            conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS crypto_predictions (
@@ -43,7 +44,6 @@ def init_predictions():
             trello_card_id TEXT
         )
     """)
-    # Añadir columna si no existe
     try:
         conn.execute("ALTER TABLE crypto_predictions ADD COLUMN trello_card_id TEXT")
     except sqlite3.OperationalError:
@@ -52,6 +52,7 @@ def init_predictions():
     conn.commit()
     conn.close()
 
+# ––– Predicciones deportivas –––
 def save_predictions(predictions_data: list, response_json: str, events_meta: dict):
     conn = sqlite3.connect(BUSINESS_DB_PATH)
     for pred in predictions_data:
@@ -99,15 +100,28 @@ def save_predictions(predictions_data: list, response_json: str, events_meta: di
     conn.commit()
     conn.close()
 
+def update_prediction_trello(pred_id: int, trello_card_id: str):
+    conn = sqlite3.connect(BUSINESS_DB_PATH)
+    conn.execute("UPDATE predictions SET trello_card_id = ? WHERE id = ?", (trello_card_id, pred_id))
+    conn.commit()
+    conn.close()
+
+def update_prediction_result(pred_id: int, result: str):
+    conn = sqlite3.connect(BUSINESS_DB_PATH)
+    conn.execute("UPDATE predictions SET result = ?, checked = 1 WHERE id = ?", (result, pred_id))
+    conn.commit()
+    conn.close()
+
 def get_all_predictions():
     conn = sqlite3.connect(BUSINESS_DB_PATH)
-    rows = conn.execute("SELECT id, event_id, sport, league, league_slug, teams, favorite, predicted_score, confidence, timestamp FROM predictions").fetchall()
+    rows = conn.execute("SELECT id, event_id, sport, league, league_slug, teams, favorite, predicted_score, confidence, timestamp, trello_card_id, checked, result FROM predictions").fetchall()
     conn.close()
     return [{"id": r[0], "event_id": r[1], "sport": r[2], "league": r[3], "league_slug": r[4],
-             "teams": r[5], "favorite": r[6], "predicted_score": r[7], "confidence": r[8], "timestamp": r[9]} for r in rows]
+             "teams": r[5], "favorite": r[6], "predicted_score": r[7], "confidence": r[8],
+             "timestamp": r[9], "trello_card_id": r[10], "checked": r[11], "result": r[12]} for r in rows]
 
+# ––– Predicciones de criptomonedas –––
 def save_crypto_prediction(symbol: str, direction: str, target_price: float, current_price: float, response_json: str) -> int:
-    """Guarda una predicción de criptomoneda y devuelve su ID."""
     conn = sqlite3.connect(BUSINESS_DB_PATH)
     cur = conn.execute(
         "INSERT INTO crypto_predictions (symbol, direction, target_price, current_price, response_json) VALUES (?, ?, ?, ?, ?)",
@@ -119,9 +133,14 @@ def save_crypto_prediction(symbol: str, direction: str, target_price: float, cur
     return new_id
 
 def update_crypto_prediction_trello(pred_id: int, trello_card_id: str):
-    """Asigna el ID de tarjeta de Trello a una predicción."""
     conn = sqlite3.connect(BUSINESS_DB_PATH)
     conn.execute("UPDATE crypto_predictions SET trello_card_id = ? WHERE id = ?", (trello_card_id, pred_id))
+    conn.commit()
+    conn.close()
+
+def update_crypto_prediction_result(pred_id: int, result: str):
+    conn = sqlite3.connect(BUSINESS_DB_PATH)
+    conn.execute("UPDATE crypto_predictions SET result = ?, checked = 1 WHERE id = ?", (result, pred_id))
     conn.commit()
     conn.close()
 
@@ -132,11 +151,5 @@ def get_all_crypto_predictions():
     return [{"id": r[0], "symbol": r[1], "direction": r[2], "target_price": r[3],
              "current_price": r[4], "response_json": r[5], "timestamp": r[6],
              "checked": r[7], "result": r[8], "trello_card_id": r[9]} for r in rows]
-
-def update_crypto_prediction_result(pred_id: int, result: str):
-    conn = sqlite3.connect(BUSINESS_DB_PATH)
-    conn.execute("UPDATE crypto_predictions SET result = ?, checked = 1 WHERE id = ?", (result, pred_id))
-    conn.commit()
-    conn.close()
 
 init_predictions()

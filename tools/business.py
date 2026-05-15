@@ -44,6 +44,13 @@ def init_db():
             active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS binance_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            capital_total REAL DEFAULT 30.0,
+            earn_amount REAL DEFAULT 20.0,
+            futures_amount REAL DEFAULT 10.0,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -87,7 +94,6 @@ def update_task_status(task_id: int, new_status: str) -> dict:
     return {"status": "ok"}
 
 def get_upcoming_tasks(hours: int = 24) -> list:
-    """Devuelve las tareas pendientes cuyo deadline está dentro de las próximas 'hours' horas."""
     now = datetime.now()
     future = now + timedelta(hours=hours)
     now_str = now.strftime("%Y-%m-%d %H:%M")
@@ -211,3 +217,21 @@ def generate_weekly_report() -> str:
         lines.append("  Aún no hay predicciones deportivas registradas.")
 
     return "\n".join(lines)
+
+# ---------- NUEVAS FUNCIONES PARA CONFIGURACIÓN DE BINANCE ----------
+def save_binance_config(capital_total: float, earn_amount: float, futures_amount: float):
+    conn = get_connection()
+    conn.execute("DELETE FROM binance_config")  # solo una fila
+    conn.execute("INSERT INTO binance_config (capital_total, earn_amount, futures_amount) VALUES (?, ?, ?)",
+                 (capital_total, earn_amount, futures_amount))
+    conn.commit()
+    conn.close()
+
+def get_binance_config() -> dict:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM binance_config ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    if row:
+        return {"capital_total": row["capital_total"], "earn_amount": row["earn_amount"], "futures_amount": row["futures_amount"]}
+    else:
+        return {"capital_total": 30.0, "earn_amount": 20.0, "futures_amount": 10.0}

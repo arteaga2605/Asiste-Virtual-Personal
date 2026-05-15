@@ -6,10 +6,12 @@ import time
 from datetime import datetime, timezone
 
 SPORTS_CONFIG = [
+    # Grandes ligas de EE.UU.
     {"sport": "basketball", "league": "nba",     "name": "NBA",      "category": "basketball"},
     {"sport": "football",   "league": "nfl",     "name": "NFL",      "category": "football"},
     {"sport": "baseball",   "league": "mlb",     "name": "MLB",      "category": "baseball"},
     {"sport": "hockey",     "league": "nhl",     "name": "NHL",      "category": "hockey"},
+    # Fútbol masculino europeo
     {"sport": "soccer",     "league": "eng.1",   "name": "Premier League",       "category": "soccer"},
     {"sport": "soccer",     "league": "esp.1",   "name": "La Liga",              "category": "soccer"},
     {"sport": "soccer",     "league": "ger.1",   "name": "Bundesliga",           "category": "soccer"},
@@ -17,9 +19,12 @@ SPORTS_CONFIG = [
     {"sport": "soccer",     "league": "fra.1",   "name": "Ligue 1",              "category": "soccer"},
     {"sport": "soccer",     "league": "ned.1",   "name": "Eredivisie",           "category": "soccer"},
     {"sport": "soccer",     "league": "sco.1",   "name": "Scottish Premiership", "category": "soccer"},
+    # Fútbol americano e internacional
     {"sport": "soccer",     "league": "usa.1",   "name": "MLS",                  "category": "soccer"},
     {"sport": "soccer",     "league": "mex.1",   "name": "Liga MX",              "category": "soccer"},
+    # Fútbol de otras regiones
     {"sport": "soccer",     "league": "ksa.1",   "name": "Saudi Pro League",     "category": "soccer"},
+    # Fútbol femenino
     {"sport": "soccer",     "league": "esp.w.1", "name": "Spanish Liga F",       "category": "soccer"},
     {"sport": "soccer",     "league": "aus.w.1", "name": "A-League Women",       "category": "soccer"},
 ]
@@ -39,7 +44,6 @@ def is_espn_available() -> bool:
     return _espn_available
 
 def normalize_text(text: str) -> str:
-    """Elimina tildes, convierte a minúsculas y trim."""
     if not text:
         return ""
     text = text.strip().lower()
@@ -104,6 +108,10 @@ def _is_today(event_date_utc):
         return False
 
 def _get_detailed_stats(sport: str, league: str, event_id: str) -> dict:
+    """
+    Obtiene estadísticas avanzadas desde el resumen de ESPN.
+    Incluye tiros, posesión, eficiencia, etc. si están disponibles.
+    """
     url = SUMMARY_URL.format(sport=sport, league=league, event_id=event_id)
     try:
         resp = requests.get(url, timeout=10)
@@ -112,19 +120,31 @@ def _get_detailed_stats(sport: str, league: str, event_id: str) -> dict:
     except Exception as e:
         print(f"Error obteniendo summary para {event_id}: {e}")
         return {}
+
+    # Extraer estadísticas de equipos desde el boxscore
+    stats_dict = {}
+    # Buscar en diferentes ubicaciones posibles del JSON
     boxscore = data.get("boxscore", {})
     teams_stats = boxscore.get("teams", [])
-    stats_dict = {}
+    if not teams_stats:
+        # Alternativa: 'competitions' > 'boxscore' > 'teams'
+        for comp in data.get("competitions", []):
+            bx = comp.get("boxscore", {})
+            teams_stats = bx.get("teams", [])
+            if teams_stats:
+                break
+
     for team in teams_stats:
         team_name = team.get("team", {}).get("displayName", "Desconocido")
         statistics_list = team.get("statistics", [])
         stats_summary = {}
         for stat in statistics_list:
-            name = stat.get("name", "otro")
+            name = stat.get("name", stat.get("label", "otro"))
             display_val = stat.get("displayValue", stat.get("value", ""))
             if display_val and display_val != "":
                 stats_summary[name] = display_val
         stats_dict[team_name] = stats_summary
+
     return stats_dict
 
 def enrich_games_with_stats(games: list) -> list:
@@ -245,17 +265,13 @@ def build_sports_prompt(games_data: list) -> str:
     return prompt
 
 def get_event_result(sport: str, league: str, event_id: str, retries: int = 2) -> dict | None:
-    """
-    Obtiene el resultado final de un evento con reintentos y timeout ampliado.
-    """
     summary_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
     last_exception = None
     for attempt in range(retries + 1):
         try:
-            resp = requests.get(summary_url, timeout=15)  # timeout ampliado a 15s
+            resp = requests.get(summary_url, timeout=15)
             resp.raise_for_status()
             data = resp.json()
-            # Procesar los datos
             header = data.get("header", {})
             competitions = header.get("competitions", [])
             if not competitions:
@@ -290,7 +306,7 @@ def get_event_result(sport: str, league: str, event_id: str, retries: int = 2) -
         except Exception as e:
             last_exception = e
             if attempt < retries:
-                time.sleep(2)  # esperar antes de reintentar
+                time.sleep(2)
             else:
                 print(f"Error obteniendo summary para resultado de {event_id} (tras {retries} reintentos): {e}")
     return None

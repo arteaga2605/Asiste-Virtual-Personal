@@ -20,8 +20,59 @@ from config import (
 from tools.trading import SELECTED_CRYPTO
 
 
+class PersistentToast(QWidget):
+    """Notificación emergente persistente: se cierra al hacer clic en ella."""
+    closed = pyqtSignal()
+
+    def __init__(self, message, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint |
+            Qt.WindowStaysOnTopHint |
+            Qt.Tool |
+            Qt.SubWindow
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        label = QLabel(message)
+        label.setStyleSheet("""
+            background-color: #333;
+            color: white;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 14px;
+        """)
+        label.setWordWrap(True)
+        layout = QVBoxLayout()
+        layout.addWidget(label)
+        self.setLayout(layout)
+
+        self.adjustSize()
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 20)
+
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(300)
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(0.9)
+        self.animation.start()
+
+    def mousePressEvent(self, event):
+        """Cierra la notificación al hacer clic."""
+        self.fade_out()
+
+    def fade_out(self):
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(500)
+        self.animation.setStartValue(0.9)
+        self.animation.setEndValue(0.0)
+        self.animation.finished.connect(self.close)
+        self.animation.start()
+
+
 class ToastNotification(QWidget):
-    """Notificación emergente que aparece en la esquina inferior derecha y se desvanece."""
+    """Notificación emergente normal que desaparece sola a los 5 segundos."""
     def __init__(self, message, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -196,8 +247,7 @@ class FloatingAvatar(QWidget):
         self.is_thinking = False
         self.eye_visible = True
         self.eyes_red = False
-        self.movement_enabled = True
-        self.user_interacting = False
+
         self.resizing = False
         self.resize_edge = None
         self.resize_start_pos = None
@@ -214,8 +264,7 @@ class FloatingAvatar(QWidget):
 
         self.exhale_particles = []
 
-        # Estado de celebración
-        self.celebration = None  # 'success', 'fail', 'mixed'
+        self.celebration = None
         self.celebration_timer = QTimer(self)
         self.celebration_timer.timeout.connect(self._reset_celebration)
 
@@ -225,14 +274,6 @@ class FloatingAvatar(QWidget):
         self.blink_timer = QTimer(self)
         self.blink_timer.timeout.connect(self.blink)
         self.schedule_next_blink()
-
-        self.target_pos = None
-        self.move_timer = QTimer(self)
-        self.move_timer.timeout.connect(self.step_towards_target)
-        QTimer.singleShot(2000, self.pick_new_destination)
-        self.wander_timer = QTimer(self)
-        self.wander_timer.timeout.connect(self.pick_new_destination)
-        self.wander_timer.start(10000)
 
         self.drag_pos = QPoint()
 
@@ -263,10 +304,9 @@ class FloatingAvatar(QWidget):
         self.alert_timer.start(10000)
         self.last_alert_msg = ""
 
-        # Timer para leer archivo de celebración
         self.celebration_check_timer = QTimer(self)
         self.celebration_check_timer.timeout.connect(self.check_celebration)
-        self.celebration_check_timer.start(5000)  # cada 5 segundos
+        self.celebration_check_timer.start(5000)
 
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.request_status)
@@ -278,7 +318,7 @@ class FloatingAvatar(QWidget):
         self.update_geometry()
 
     # ------------------------------------------------------------
-    # Redimensionamiento manual (sin cambios)
+    # Redimensionamiento manual
     # ------------------------------------------------------------
     def update_geometry(self):
         w = self.width()
@@ -362,23 +402,35 @@ class FloatingAvatar(QWidget):
         return edges if edges else None
 
     # ------------------------------------------------------------
-    # Toast de alertas (sin cambios)
+    # Alertas (ahora distingue entre persistentes y normales)
     # ------------------------------------------------------------
     def check_auto_alerts(self):
         try:
             if os.path.exists(ALERT_FILE):
                 with open(ALERT_FILE, "r", encoding="utf-8") as f:
-                    msg = f.read().strip()
-                if msg and msg != self.last_alert_msg:
-                    self.last_alert_msg = msg
-                    toast = ToastNotification(f"🔔 {msg}")
-                    toast.show()
+                    raw = f.read().strip()
+                if raw and raw != self.last_alert_msg:
+                    self.last_alert_msg = raw
+                    try:
+                        data = json.loads(raw)
+                        messages = data.get("messages", [])
+                        persistent = data.get("persistent", False)
+                    except:
+                        messages = [raw]
+                        persistent = False
+
+                    for msg in messages:
+                        if persistent:
+                            toast = PersistentToast(f"🔔 {msg}")
+                        else:
+                            toast = ToastNotification(f"🔔 {msg}")
+                        toast.show()
                     os.remove(ALERT_FILE)
         except Exception:
             pass
 
     # ------------------------------------------------------------
-    # Estado del sistema (sin cambios)
+    # Estado del sistema
     # ------------------------------------------------------------
     def request_status(self):
         def _ask():
@@ -407,17 +459,9 @@ class FloatingAvatar(QWidget):
         self.status_ollama.setStyleSheet(f"color: {color(status.get('ollama', False))};")
 
     # ------------------------------------------------------------
-    # Parpadeo y ojos rojos (sin cambios)
+    # Parpadeo y ojos rojos
     # ------------------------------------------------------------
     def eventFilter(self, obj, event):
-        if obj == self.input_field:
-            if event.type() == event.FocusIn:
-                self.user_interacting = True
-                self.move_timer.stop()
-            elif event.type() == event.FocusOut:
-                self.user_interacting = False
-                if self.movement_enabled:
-                    self.pick_new_destination()
         return super().eventFilter(obj, event)
 
     def schedule_next_blink(self):
@@ -436,41 +480,7 @@ class FloatingAvatar(QWidget):
         self.update()
 
     # ------------------------------------------------------------
-    # Movimiento (sin cambios)
-    # ------------------------------------------------------------
-    def pick_new_destination(self):
-        if not self.movement_enabled or self.user_interacting or self.resizing:
-            return
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return
-        geom = screen.availableGeometry()
-        target_x = random.randint(0, max(0, geom.width() - self.width()))
-        target_y = random.randint(0, max(0, geom.height() - self.height()))
-        self.target_pos = QPoint(target_x, target_y)
-        if not self.move_timer.isActive():
-            self.move_timer.start(30)
-
-    def step_towards_target(self):
-        if self.target_pos is None or not self.movement_enabled:
-            self.move_timer.stop()
-            return
-        current = self.pos()
-        dx = self.target_pos.x() - current.x()
-        dy = self.target_pos.y() - current.y()
-        distance = (dx**2 + dy**2) ** 0.5
-        if distance < 5:
-            self.move(self.target_pos)
-            self.target_pos = None
-            self.move_timer.stop()
-            return
-        step_size = 4 / distance
-        new_x = int(current.x() + dx * step_size)
-        new_y = int(current.y() + dy * step_size)
-        self.move(new_x, new_y)
-
-    # ------------------------------------------------------------
-    # Animación del cigarro y caladas (sin cambios)
+    # Animación del cigarro y caladas
     # ------------------------------------------------------------
     def _animate_smoke(self):
         step = 0.05
@@ -512,7 +522,7 @@ class FloatingAvatar(QWidget):
             self.smoke_timer.start(30)
 
     # ------------------------------------------------------------
-    # Comunicación con el servidor (sin cambios)
+    # Comunicación con el servidor
     # ------------------------------------------------------------
     def send_question(self):
         text = self.input_field.text().strip()
@@ -593,7 +603,7 @@ class FloatingAvatar(QWidget):
         self.bulb_label.move(cx - self.bulb_label.width()//2, 30)
 
     # ------------------------------------------------------------
-    # CELEBRACIÓN (lectura del archivo y animación)
+    # CELEBRACIÓN
     # ------------------------------------------------------------
     def check_celebration(self):
         try:
@@ -602,9 +612,8 @@ class FloatingAvatar(QWidget):
                     tipo = f.read().strip()
                 if tipo and tipo != self.celebration:
                     self.celebration = tipo
-                    self.celebration_timer.start(10000)  # 10 segundos
+                    self.celebration_timer.start(10000)
                     self.update()
-                # Eliminar archivo para no repetir
                 os.remove(CELEBRATION_FILE)
         except Exception:
             pass
@@ -615,7 +624,7 @@ class FloatingAvatar(QWidget):
         self.update()
 
     # ------------------------------------------------------------
-    # PINTADO DE TOALLIN (South Park) – con colores de celebración
+    # PINTADO DE TOALLIN
     # ------------------------------------------------------------
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -623,15 +632,14 @@ class FloatingAvatar(QWidget):
         cx = self.avatar_width // 2
         cy = 110
 
-        # Color base del cuerpo según celebración
         if self.celebration == 'success':
-            body_color = QColor(100, 220, 100)  # verde
+            body_color = QColor(100, 220, 100)
         elif self.celebration == 'fail':
-            body_color = QColor(220, 100, 100)  # rojo
+            body_color = QColor(220, 100, 100)
         elif self.celebration == 'mixed':
-            body_color = QColor(255, 165, 0)   # naranja
+            body_color = QColor(255, 165, 0)
         else:
-            body_color = QColor(255, 255, 255)  # blanco normal
+            body_color = QColor(255, 255, 255)
 
         if self.use_custom_image and self.pixmap:
             x = (self.avatar_width - self.pixmap.width()) // 2
@@ -644,13 +652,11 @@ class FloatingAvatar(QWidget):
             painter.setPen(QPen(QColor(180, 180, 180), 2))
             painter.drawRoundedRect(cx - toalla_w//2, cy - toalla_h//2, toalla_w, toalla_h, 8, 8)
 
-            # Dobleces
             pen_fold = QPen(QColor(220, 220, 220), 1)
             painter.setPen(pen_fold)
             for y_fold in range(cy - 30, cy + 30, 15):
                 painter.drawLine(cx - 30, y_fold, cx + 30, y_fold)
 
-            # Brazos y cigarro (sin cambios)
             painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
             shoulder_x = cx - 38
             shoulder_y = cy - 20
@@ -679,14 +685,12 @@ class FloatingAvatar(QWidget):
                         py = cigar_end_y + offset[1] + random.randint(-2, 2)
                         painter.drawEllipse(px, py, 4, 4)
 
-            # Brazo derecho y piernas
             painter.setPen(QPen(QColor(139, 90, 43), 4, Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(cx + 38, cy - 20, cx + 60, cy + 5)
             painter.drawLine(cx + 60, cy + 5, cx + 52, cy + 15)
             painter.drawLine(cx - 10, cy + 45, cx - 15, cy + 70)
             painter.drawLine(cx + 10, cy + 45, cx + 15, cy + 70)
 
-            # Ojos
             eye_y = cy - 20
             eye_spacing = 15
             if self.eye_visible:
@@ -703,14 +707,11 @@ class FloatingAvatar(QWidget):
                 painter.drawLine(cx - eye_spacing - 14, eye_y, cx - eye_spacing + 4, eye_y)
                 painter.drawLine(cx + eye_spacing - 4, eye_y, cx + eye_spacing + 14, eye_y)
 
-            # Boca según celebración
             mouth_y_line = cy + 25
             if self.celebration == 'success':
-                # Sonrisa amplia
                 painter.setPen(QPen(Qt.black, 2))
                 painter.drawArc(cx - 8, mouth_y_line - 4, 16, 12, 0, -180 * 16)
             elif self.celebration == 'fail':
-                # Fruncido
                 painter.setPen(QPen(Qt.black, 2))
                 painter.drawArc(cx - 8, mouth_y_line + 2, 16, 10, 0, 180 * 16)
             elif self.celebration == 'mixed':
@@ -725,7 +726,6 @@ class FloatingAvatar(QWidget):
                     painter.setPen(QPen(Qt.black, 2))
                     painter.drawLine(cx - 5, mouth_y_line, cx + 5, mouth_y_line)
 
-            # Partículas de exhalación
             painter.setBrush(QColor(150, 150, 150, 120))
             painter.setPen(Qt.NoPen)
             for p in self.exhale_particles:
@@ -735,14 +735,10 @@ class FloatingAvatar(QWidget):
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual (con Trello y demás opciones)
+    # Menú contextual
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        if self.movement_enabled:
-            menu.addAction("🛑 No caminar").triggered.connect(self.toggle_movement)
-        else:
-            menu.addAction("🚶 Caminar").triggered.connect(self.toggle_movement)
 
         crypto_menu = QMenu("₿ Criptomonedas", self)
         for sym in SELECTED_CRYPTO:
@@ -772,6 +768,7 @@ class FloatingAvatar(QWidget):
 
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
+        menu.addAction("💼 Gestor Binance").triggered.connect(self.show_binance_manager)
         menu.addAction("💡 Ideas de ingresos").triggered.connect(self.show_income_ideas)
         menu.addSeparator()
         menu.addAction("🎯 Metas").triggered.connect(self.show_goals)
@@ -782,14 +779,6 @@ class FloatingAvatar(QWidget):
         menu.addAction("⬆️ Expandir burbuja").triggered.connect(self.expand_bubble)
         menu.addAction("❌ Esconder burbuja").triggered.connect(self.hide_bubble)
         menu.exec_(event.globalPos())
-
-    def toggle_movement(self):
-        self.movement_enabled = not self.movement_enabled
-        if self.movement_enabled:
-            self.pick_new_destination()
-        else:
-            self.move_timer.stop()
-            self.target_pos = None
 
     def show_crypto_analysis(self, symbol):
         self.start_query(f"__CRYPTO__:{symbol}")
@@ -810,6 +799,8 @@ class FloatingAvatar(QWidget):
         self.start_query("__GOALS__")
     def show_weekly(self):
         self.start_query("__WEEKLY__")
+    def show_binance_manager(self):
+        self.start_query("__BINANCE_MANAGER__")
 
     def show_trello_boards(self):
         self.start_query("__TRELLO__:list_boards")
