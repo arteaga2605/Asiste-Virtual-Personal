@@ -51,6 +51,14 @@ def init_db():
             futures_amount REAL DEFAULT 10.0,
             updated_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS earn_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            amount REAL,
+            release_date TEXT,
+            notified INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -124,10 +132,8 @@ def list_contacts() -> list:
 # ---------- METAS ----------
 def add_goal(description: str, target_value: float = 100, unit: str = "%") -> dict:
     conn = get_connection()
-    conn.execute(
-        "INSERT INTO goals (description, target_value, unit) VALUES (?, ?, ?)",
-        (description, target_value, unit)
-    )
+    conn.execute("INSERT INTO goals (description, target_value, unit) VALUES (?, ?, ?)",
+                 (description, target_value, unit))
     conn.commit()
     conn.close()
     return {"status": "ok", "action": "add_goal"}
@@ -160,28 +166,14 @@ def generate_weekly_report() -> str:
     now = datetime.now()
     since = now - timedelta(days=7)
     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-
     conn = get_connection()
-    tasks_done = conn.execute(
-        "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND created_at >= ?",
-        (since_str,)
-    ).fetchone()["cnt"]
-
-    new_notes = conn.execute(
-        "SELECT COUNT(*) as cnt FROM notes WHERE created_at >= ?",
-        (since_str,)
-    ).fetchone()["cnt"]
-
+    tasks_done = conn.execute("SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND created_at >= ?", (since_str,)).fetchone()["cnt"]
+    new_notes = conn.execute("SELECT COUNT(*) as cnt FROM notes WHERE created_at >= ?", (since_str,)).fetchone()["cnt"]
     goals = conn.execute("SELECT * FROM goals WHERE active = 1").fetchall()
-
     try:
-        interactions = conn.execute(
-            "SELECT COUNT(*) as cnt FROM conversation_history WHERE timestamp >= ?",
-            (since_str,)
-        ).fetchone()["cnt"]
+        interactions = conn.execute("SELECT COUNT(*) as cnt FROM conversation_history WHERE timestamp >= ?", (since_str,)).fetchone()["cnt"]
     except:
         interactions = 0
-
     from tools.predictions import get_all_predictions
     predictions = get_all_predictions()
     total_preds = len(predictions)
@@ -193,9 +185,7 @@ def generate_weekly_report() -> str:
         if result and result.get("winner"):
             if pred["favorite"].lower() == result["winner"].lower():
                 aciertos += 1
-
     conn.close()
-
     lines = [
         "📄 **Informe Semanal** (últimos 7 días)\n",
         f"✅ Tareas completadas: {tasks_done}",
@@ -208,20 +198,18 @@ def generate_weekly_report() -> str:
             lines.append(f"  - {goal['description']}: {prog}")
     else:
         lines.append("  Ninguna meta registrada.")
-
     lines.append("\n📊 **Rendimiento del asistente**:")
     lines.append(f"  Conversaciones esta semana: {interactions} interacciones")
     if total_preds > 0:
         lines.append(f"  Predicciones deportivas totales: {total_preds} (aciertos: {aciertos})")
     else:
         lines.append("  Aún no hay predicciones deportivas registradas.")
-
     return "\n".join(lines)
 
-# ---------- NUEVAS FUNCIONES PARA CONFIGURACIÓN DE BINANCE ----------
+# ---------- CONFIGURACIÓN BINANCE ----------
 def save_binance_config(capital_total: float, earn_amount: float, futures_amount: float):
     conn = get_connection()
-    conn.execute("DELETE FROM binance_config")  # solo una fila
+    conn.execute("DELETE FROM binance_config")
     conn.execute("INSERT INTO binance_config (capital_total, earn_amount, futures_amount) VALUES (?, ?, ?)",
                  (capital_total, earn_amount, futures_amount))
     conn.commit()
@@ -235,3 +223,31 @@ def get_binance_config() -> dict:
         return {"capital_total": row["capital_total"], "earn_amount": row["earn_amount"], "futures_amount": row["futures_amount"]}
     else:
         return {"capital_total": 30.0, "earn_amount": 20.0, "futures_amount": 10.0}
+
+# ---------- PRODUCTOS EARN ----------
+def add_earn_product(symbol: str, amount: float, release_date: str):
+    conn = get_connection()
+    conn.execute("INSERT INTO earn_products (symbol, amount, release_date) VALUES (?, ?, ?)",
+                 (symbol, amount, release_date))
+    conn.commit()
+    conn.close()
+
+def get_earn_expiring_soon(hours: int = 24) -> list:
+    """Devuelve productos cuyo release_date está dentro de las próximas horas."""
+    now = datetime.now()
+    future = now + timedelta(hours=hours)
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    future_str = future.strftime("%Y-%m-%d %H:%M")
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM earn_products WHERE notified = 0 AND release_date BETWEEN ? AND ?",
+        (now_str, future_str)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def mark_earn_notified(product_id: int):
+    conn = get_connection()
+    conn.execute("UPDATE earn_products SET notified = 1 WHERE id = ?", (product_id,))
+    conn.commit()
+    conn.close()

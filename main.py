@@ -37,13 +37,13 @@ from tools.predictions import (
 from tools.alerts import start_alert_monitor
 from tools.business import (
     generate_weekly_report, list_goals,
-    save_binance_config, get_binance_config
+    save_binance_config, get_binance_config,
+    add_earn_product, get_earn_expiring_soon
 )
 from tools.binance_manager import generate_business_suggestions, generate_business_summary
 from tools.trello import create_card, move_card, add_comment
 import ollama
 
-# Cliente de Ollama con timeout configurable
 ollama_client = ollama.Client(host=OLLAMA_HOST, timeout=OLLAMA_TIMEOUT)
 
 SYSTEM_PROMPT_NEWS = (
@@ -125,7 +125,7 @@ def direct_ollama_query(system_prompt: str, user_prompt: str, model: str = OLLAM
         return response["message"]["content"]
     except Exception as e:
         print(f"Error en consulta a Ollama ({model}): {e}")
-        return f"Error al comunicarse con el modelo {model}. Es posible que esté sobrecargado. Inténtalo de nuevo o ajusta OLLAMA_TIMEOUT en .env."
+        return f"Error al comunicarse con el modelo {model}. Intenta de nuevo más tarde."
 
 
 def _extract_first_json(text: str) -> str | None:
@@ -262,7 +262,7 @@ def analyze_usage_history(history: list) -> str:
     return "\n".join(summary_lines)
 
 
-# --------------- Evaluación automática (cripto y deportes) ---------------
+# --------------- Evaluación automática ---------------
 _eval_lock = threading.Lock()
 
 def evaluate_crypto_predictions():
@@ -400,9 +400,10 @@ def _write_alerts(new_crypto_results: list, new_sport_results: list = None, pers
             icon = "✅" if sr.get("result") == "acierto" else "❌"
             messages.append(f"{icon} Deporte {sr.get('league', '')}: {sr.get('teams', '')} → {sr.get('detail', '')}")
     if messages:
+        prefix = "PERSIST:" if persistent else ""
         try:
             with open(ALERT_FILE, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"messages": messages, "persistent": persistent}))
+                f.write(prefix + "\n".join(messages))
         except:
             pass
 
@@ -492,12 +493,10 @@ def _auto_binance_suggestions_loop():
             prompt = generate_business_suggestions()
             if prompt:
                 response = direct_ollama_query(SYSTEM_PROMPT_BINANCE_MANAGER, prompt, model=OLLAMA_MODEL)
-                # Escribir en ALERT_FILE como persistente para que el usuario deba hacer clic
-                try:
-                    with open(ALERT_FILE, "w", encoding="utf-8") as f:
-                        f.write(json.dumps({"messages": [f"💼 Gestor Binance: {response}"], "persistent": True}))
-                except:
-                    pass
+                # Escribir alerta persistente (PERSIST:)
+                msg = f"PERSIST:💼 Gestor Binance: {response}"
+                with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                    f.write(msg)
         except Exception as e:
             print(f"[BINANCE-MANAGER] Error generando sugerencia: {e}")
         time.sleep(BINANCE_MANAGER_INTERVAL)
@@ -720,6 +719,24 @@ def handle_client(conn, addr):
                     response = f"Configuración de Binance actualizada: Capital ${capital:.2f}, Earn ${earn:.2f}, Futuros ${futures:.2f}"
                 except:
                     response = "Error al leer los datos. Usa el formato: __SETUP_BINANCE__:{\"capital\":30, \"earn\":20, \"futures\":10}"
+            else:
+                response = "Debes proporcionar los datos en formato JSON."
+
+        elif user_input.startswith("__ADD_EARN__"):
+            parts = user_input.split(":", 1)
+            if len(parts) > 1:
+                try:
+                    data = json.loads(parts[1])
+                    symbol = data.get("symbol", "")
+                    amount = float(data.get("amount", 0))
+                    release_date = data.get("release_date", "")
+                    if symbol and amount and release_date:
+                        add_earn_product(symbol, amount, release_date)
+                        response = f"Producto Earn añadido: {symbol} por {amount} USDT, vence {release_date}."
+                    else:
+                        response = "Faltan datos. Ejemplo: __ADD_EARN__:{\"symbol\":\"DOT\",\"amount\":5,\"release_date\":\"2025-05-25 12:00\"}"
+                except:
+                    response = "Error al leer los datos."
             else:
                 response = "Debes proporcionar los datos en formato JSON."
 
