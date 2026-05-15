@@ -242,7 +242,7 @@ def analyze_usage_history(history: list) -> str:
     return "\n".join(summary_lines)
 
 
-# --------------- Evaluación de predicciones cripto (usada por hilo y reporte) ---------------
+# --------------- Evaluación de predicciones cripto ---------------
 _eval_lock = threading.Lock()
 
 def evaluate_crypto_predictions():
@@ -251,6 +251,7 @@ def evaluate_crypto_predictions():
     Si han pasado más de 24h, verifica el resultado, actualiza BD, mueve tarjeta Trello
     y devuelve una lista de dicts con los resultados nuevos.
     """
+    print("[EVAL] Evaluando predicciones de criptomonedas...")
     new_results = []
     try:
         crypto_preds = get_all_crypto_predictions()
@@ -262,13 +263,17 @@ def evaluate_crypto_predictions():
             try:
                 pred_time = datetime.fromisoformat(pred_time_str)
             except:
+                print(f"[EVAL] No se pudo interpretar la fecha de la predicción {cp['id']}")
                 continue
-            if (now - pred_time) < timedelta(hours=24):
-                continue  # aún no se cumple el plazo
+            hours_passed = (now - pred_time).total_seconds() / 3600
+            if hours_passed < 24:
+                print(f"[EVAL] Predicción {cp['symbol']} (id {cp['id']}) aún no cumple 24h (han pasado {hours_passed:.1f}h)")
+                continue
 
             symbol = cp["symbol"]
             current_price = get_current_crypto_price(symbol)
             if current_price is None:
+                print(f"[EVAL] No se pudo obtener el precio actual de {symbol}")
                 continue
 
             predicted_direction = cp["direction"]
@@ -281,7 +286,23 @@ def evaluate_crypto_predictions():
                 result = "fallo"
 
             update_crypto_prediction_result(cp["id"], result)
-            _handle_crypto_result_trello(cp["id"], cp.get("trello_card_id"), result, old_price, current_price)
+            print(f"[EVAL] Predicción {cp['symbol']} (id {cp['id']}): {result}. "
+                  f"Precio anterior: ${old_price:.2f}, actual: ${current_price:.2f}")
+
+            # Mover tarjeta Trello
+            trello_id = cp.get("trello_card_id")
+            if trello_id:
+                try:
+                    target_list = TRELLO_LIST_GANANCIA if result == "acierto" else TRELLO_LIST_PERDIDA
+                    move_card(trello_id, TRELLO_BOARD_NAME, target_list)
+                    add_comment(trello_id, TRELLO_BOARD_NAME,
+                                f"Resultado: {result}. Precio anterior: ${old_price:.2f}, actual: ${current_price:.2f}")
+                    print(f"[EVAL] Tarjeta Trello {trello_id} movida a {target_list}")
+                except Exception as e:
+                    print(f"[EVAL] Error moviendo tarjeta Trello {trello_id}: {e}")
+            else:
+                print(f"[EVAL] La predicción {cp['id']} no tiene tarjeta Trello asociada.")
+
             new_results.append({
                 "symbol": symbol,
                 "direction": predicted_direction,
@@ -290,15 +311,12 @@ def evaluate_crypto_predictions():
                 "new_price": current_price
             })
     except Exception as e:
-        print(f"Error evaluando predicciones cripto: {e}")
+        print(f"[EVAL] Error evaluando predicciones cripto: {e}")
+    print(f"[EVAL] Evaluación completada. {len(new_results)} resultados nuevos.")
     return new_results
 
 
 def _write_celebration(new_results: list, sport_results: list = None):
-    """
-    Escribe en CELEBRATION_FILE el tipo de celebración ('success', 'fail', 'mixed')
-    según los resultados nuevos.
-    """
     if not new_results and not sport_results:
         return
     all_success = True
@@ -329,7 +347,6 @@ def _write_celebration(new_results: list, sport_results: list = None):
 
 
 def _write_alerts(new_crypto_results: list, new_sport_results: list = None):
-    """Escribe en ALERT_FILE mensajes de aciertos/fallos para toast."""
     messages = []
     for r in new_crypto_results:
         icon = "✅" if r["result"] == "acierto" else "❌"
@@ -350,6 +367,26 @@ def _trello_configured() -> bool:
     return bool(TRELLO_API_KEY and TRELLO_TOKEN)
 
 
+def _verify_trello_lists():
+    """Comprueba que las listas de Trello existen y las imprime en consola."""
+    if not _trello_configured():
+        print("[TRELLO] No configurado. Las predicciones no se guardarán en Trello.")
+        return
+    try:
+        from tools.trello import list_lists
+        lists = list_lists(TRELLO_BOARD_NAME)
+        if lists and "error" not in lists[0]:
+            names = [l["name"] for l in lists]
+            print(f"[TRELLO] Listas encontradas en el tablero '{TRELLO_BOARD_NAME}': {names}")
+            for required in [TRELLO_LIST_PENDIENTES, TRELLO_LIST_GANANCIA, TRELLO_LIST_PERDIDA]:
+                if required not in names:
+                    print(f"[TRELLO] ⚠️ La lista requerida '{required}' no existe. Las tarjetas no se moverán correctamente.")
+        else:
+            print(f"[TRELLO] No se pudo acceder al tablero '{TRELLO_BOARD_NAME}'. Verifica el nombre y las credenciales.")
+    except Exception as e:
+        print(f"[TRELLO] Error verificando listas: {e}")
+
+
 def _create_prediction_card(symbol: str, direction: str, target_price: float, current_price: float, reasoning: str, pred_id: int):
     if not _trello_configured():
         return
@@ -364,29 +401,17 @@ def _create_prediction_card(symbol: str, direction: str, target_price: float, cu
         result = create_card(TRELLO_LIST_PENDIENTES, TRELLO_BOARD_NAME, card_name, description)
         if "id" in result:
             update_crypto_prediction_trello(pred_id, result["id"])
+            print(f"[TRELLO] Tarjeta creada para {symbol}: {result['id']}")
+        else:
+            print(f"[TRELLO] No se pudo crear tarjeta para {symbol}: {result}")
     except Exception as e:
-        print(f"Error creando tarjeta Trello: {e}")
-
-
-def _handle_crypto_result_trello(pred_id: int, trello_card_id: str, result: str, old_price: float, new_price: float):
-    if not _trello_configured() or not trello_card_id:
-        return
-    try:
-        target_list = TRELLO_LIST_GANANCIA if result == "acierto" else TRELLO_LIST_PERDIDA
-        move_card(trello_card_id, TRELLO_BOARD_NAME, target_list)
-        comment = (
-            f"Resultado: {result.upper()}\n"
-            f"Precio anterior: ${old_price:.2f}\n"
-            f"Precio actual: ${new_price:.2f}"
-        )
-        add_comment(trello_card_id, TRELLO_BOARD_NAME, comment)
-    except Exception as e:
-        print(f"Error moviendo tarjeta Trello: {e}")
+        print(f"[TRELLO] Error creando tarjeta: {e}")
 
 
 def _auto_evaluate_loop():
     """Hilo que evalúa predicciones cripto cada CRYPTO_EVALUATION_INTERVAL segundos."""
-    time.sleep(10)  # esperar inicio
+    time.sleep(10)
+    print(f"[EVAL] Hilo de evaluación automática iniciado (cada {CRYPTO_EVALUATION_INTERVAL//3600} horas).")
     while True:
         with _eval_lock:
             new_results = evaluate_crypto_predictions()
@@ -503,7 +528,6 @@ def handle_client(conn, addr):
             print(f"Respuesta (deportes): {response[:100]}...")
 
         elif user_input.startswith("__REPORT__"):
-            # Evaluar cripto pendientes y obtener resultados nuevos
             with _eval_lock:
                 new_crypto_results = evaluate_crypto_predictions()
 
@@ -515,7 +539,7 @@ def handle_client(conn, addr):
                 total_aciertos = 0
                 total_fallos = 0
                 total_pendientes = 0
-                sport_new_results = []  # para celebraciones
+                sport_new_results = []
                 for pred in all_preds:
                     event_id = pred["event_id"]
                     sport = pred["sport"]
@@ -562,7 +586,6 @@ def handle_client(conn, addr):
                         response += f"  {det}\n"
                     response += "\n"
 
-            # Reporte cripto
             crypto_preds = get_all_crypto_predictions()
             response += "\n₿ **Predicciones de Criptomonedas**\n\n"
             if not crypto_preds:
@@ -577,24 +600,13 @@ def handle_client(conn, addr):
                         else:
                             cripto_stats[symbol]["fallos"] += 1
                     else:
-                        pred_time_str = cp["timestamp"]
-                        try:
-                            pred_time = datetime.fromisoformat(pred_time_str)
-                            now = datetime.now()
-                            if (now - pred_time) < timedelta(hours=24):
-                                cripto_stats[symbol]["pendientes"] += 1
-                            else:
-                                # Debería haberse evaluado ya, pero por si acaso
-                                cripto_stats[symbol]["pendientes"] += 1
-                        except:
-                            cripto_stats[symbol]["pendientes"] += 1
+                        cripto_stats[symbol]["pendientes"] += 1
                 for symbol, stats in sorted(cripto_stats.items()):
                     response += f"**{symbol}**: {stats['aciertos']} aciertos, {stats['fallos']} fallos"
                     if stats['pendientes'] > 0:
                         response += f", {stats['pendientes']} pendientes"
                     response += "\n"
 
-            # Generar alertas y celebraciones
             _write_alerts(new_crypto_results, sport_new_results)
             _write_celebration(new_crypto_results, sport_new_results)
 
@@ -688,11 +700,16 @@ def main():
     print("Stream Binance activo (criptos seleccionadas).")
     start_alert_monitor(interval_minutes=10)
     print("Monitor de alertas iniciado (criptos + tareas).")
+
+    # Verificar listas de Trello al inicio
+    _verify_trello_lists()
+
     threading.Thread(target=_refresh_sports_cache, daemon=True).start()
     print("Refresco automático de datos deportivos iniciado.")
-    # Hilo de evaluación automática de cripto cada 2 horas
+
+    # Hilo de evaluación automática de cripto cada 4 horas
     threading.Thread(target=_auto_evaluate_loop, daemon=True).start()
-    print("Evaluación automática de cripto cada 2 horas iniciada.")
+    print("Evaluación automática de cripto cada 4 horas iniciada.")
 
     server_thread = threading.Thread(target=start_server, daemon=True)
     server_thread.start()

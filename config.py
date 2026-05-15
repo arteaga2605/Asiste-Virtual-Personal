@@ -39,4 +39,5 @@ TRELLO_LIST_PENDIENTES = os.getenv("TRELLO_LIST_PENDIENTES", "Pendientes")
 TRELLO_LIST_GANANCIA = os.getenv("TRELLO_LIST_GANANCIA", "Ganancia")
 TRELLO_LIST_PERDIDA = os.getenv("TRELLO_LIST_PERDIDA", "Perdida")
 
-CRYPTO_EVALUATION_INTERVAL = int(os.getenv("CRYPTO_EVALUATION_INTERVAL", str(2 * 60 * 60)))
+# Intervalo de evaluación de predicciones cripto (4 horas en segundos)
+CRYPTO_EVALUATION_INTERVAL = int(os.getenv("CRYPTO_EVALUATION_INTERVAL", str(4 * 60 * 60)))
