@@ -681,7 +681,7 @@ class FloatingAvatar(QWidget):
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual (con submenú Avanzado)
+    # Menú contextual (con el nuevo botón)
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -694,7 +694,6 @@ class FloatingAvatar(QWidget):
         crypto_menu.addAction("📊 Todas las criptos").triggered.connect(lambda: self.show_crypto_analysis("ALL"))
         menu.addMenu(crypto_menu)
 
-        # Submenú Análisis Avanzado
         advanced_menu = QMenu("📈 Avanzado", self)
         for sym in SELECTED_CRYPTO:
             name = sym.replace("USDT", "")
@@ -723,6 +722,8 @@ class FloatingAvatar(QWidget):
 
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
+        # NUEVO BOTÓN
+        menu.addAction("🧮 Evaluar Operación").triggered.connect(self.show_evaluate_operation)
         menu.addAction("💼 Gestor Binance").triggered.connect(self.show_binance_manager)
         menu.addAction("💡 Ideas de ingresos").triggered.connect(self.show_income_ideas)
         menu.addSeparator()
@@ -758,6 +759,10 @@ class FloatingAvatar(QWidget):
         self.start_query("__WEEKLY__")
     def show_binance_manager(self):
         self.start_query("__BINANCE_MANAGER__")
+    def show_evaluate_operation(self):
+        # Coloca un texto de ejemplo en el campo de entrada
+        self.input_field.setText("Evaluar operación: XRPUSDT, entrada 1.4233, tamaño 69.8399, SL 1.4054, TP 1.4542")
+        self.input_field.setFocus()
 
     def show_trello_boards(self):
         self.start_query("__TRELLO__:list_boards")

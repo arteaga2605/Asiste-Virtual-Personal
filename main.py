@@ -7,6 +7,7 @@ import json
 import time
 import unicodedata
 import os
+import re
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from config import (
@@ -23,7 +24,8 @@ from config import (
 )
 from tools.trading import (
     start_binance_stream, fetch_live_prices_for_news, build_news_prompt,
-    SELECTED_CRYPTO, is_binance_stream_active, build_crypto_analysis_prompt, get_current_crypto_price
+    SELECTED_CRYPTO, is_binance_stream_active, build_crypto_analysis_prompt, get_current_crypto_price,
+    get_live_price, _get_klines, calculate_rsi, get_order_book_pressure
 )
 from tools.memory import load_recent_history, save_message
 from agent import process_user_message
@@ -508,6 +510,124 @@ def _auto_binance_suggestions_loop():
         time.sleep(BINANCE_MANAGER_INTERVAL)
 
 
+# --------------- NUEVA FUNCIÓN PARA EVALUAR OPERACIÓN ACTIVA ---------------
+def evaluate_active_operation(user_input: str) -> str:
+    """
+    Extrae los datos de una operación activa a partir de un texto como:
+    "Evaluar operación: XRPUSDT, entrada 1.4233, tamaño 69.8399, SL 1.4054, TP 1.4542"
+    y devuelve una recomendación basada en el análisis actual del mercado.
+    """
+    # Intentar extraer datos con regex flexible
+    symbol_match = re.search(r'(?:de\s+)?([A-Za-z]{2,10}USDT)', user_input, re.IGNORECASE)
+    entry_match = re.search(r'(?:entrada|precio\s*(?:entrada|de\s*entrada))\s*(?:es\s*)?(\d+\.?\d*)', user_input, re.IGNORECASE)
+    size_match = re.search(r'(?:tamaño|tamano)\s*(?:es\s*)?(\d+\.?\d*)', user_input, re.IGNORECASE)
+    sl_match = re.search(r'(?:SL|stop\s*loss)\s*(?:es\s*)?(\d+\.?\d*)', user_input, re.IGNORECASE)
+    tp_match = re.search(r'(?:TP|take\s*profit)\s*(?:es\s*)?(\d+\.?\d*)', user_input, re.IGNORECASE)
+
+    if not symbol_match or not entry_match:
+        return "No se pudo interpretar la operación. Asegúrate de incluir el símbolo (ej. XRPUSDT) y el precio de entrada."
+
+    symbol = symbol_match.group(1).upper()
+    entry = float(entry_match.group(1))
+    size = float(size_match.group(1)) if size_match else 0.0
+    sl = float(sl_match.group(1)) if sl_match else None
+    tp = float(tp_match.group(1)) if tp_match else None
+
+    # Obtener precio actual
+    current_price = get_current_crypto_price(symbol)
+    if current_price is None:
+        return f"No se pudo obtener el precio actual de {symbol}."
+
+    # Calcular distancias
+    dist_to_sl = None
+    dist_to_tp = None
+    if sl:
+        dist_to_sl = round(current_price - sl, 4)
+    if tp:
+        dist_to_tp = round(tp - current_price, 4)
+
+    # Indicadores rápidos
+    # RSI 1h
+    df_1h = _get_klines(symbol, "1h", limit=20)
+    rsi_value = None
+    if not df_1h.empty and len(df_1h) >= 14:
+        rsi_series = calculate_rsi(df_1h["Close"], 14)
+        rsi_value = round(float(rsi_series.iloc[-1]), 2) if not pd.isna(rsi_series.iloc[-1]) else None
+
+    # Presión compradora
+    pressure = get_order_book_pressure(symbol)
+
+    # Tendencia simple (precio vs EMA 20 en 1h)
+    trend_bias = "neutral"
+    if not df_1h.empty:
+        ema20 = df_1h["Close"].ewm(span=20, adjust=False).mean().iloc[-1]
+        if current_price > ema20:
+            trend_bias = "alcista"
+        else:
+            trend_bias = "bajista"
+
+    # Decisión
+    reasons = []
+    recommendation = "Mantener"
+    action = "Mantén la operación abierta y sigue monitorizando."
+
+    # Evaluar cercanía al TP
+    if tp and dist_to_tp is not None and dist_to_tp <= (tp - entry) * 0.2:  # precio a menos del 20% del TP
+        recommendation = "Cerrar (tomar ganancias)"
+        reasons.append(f"El precio está muy cerca del TP (${tp}). Distancia: ${dist_to_tp:.4f}.")
+    elif tp and dist_to_tp is not None and dist_to_tp <= (tp - entry) * 0.4:
+        recommendation = "Mover SL a BE o asegurar parcial"
+        reasons.append(f"El precio se acerca al TP (${tp}). Considera asegurar ganancias moviendo el SL al precio de entrada.")
+
+    # Evaluar cercanía al SL
+    if sl and dist_to_sl is not None and dist_to_sl <= (entry - sl) * 0.2:  # muy cerca del SL
+        recommendation = "Cerrar (evitar pérdida)"
+        reasons.append(f"El precio está peligrosamente cerca del SL (${sl}). Distancia: ${dist_to_sl:.4f}.")
+    elif sl and dist_to_sl is not None and dist_to_sl <= (entry - sl) * 0.4:
+        reasons.append(f"El precio se acerca al SL (${sl}). Evalúa si el contexto de mercado justifica mantener la operación.")
+
+    # Evaluar RSI
+    if rsi_value:
+        if rsi_value > 70:
+            reasons.append(f"RSI 1h en {rsi_value} (sobrecompra). Podría haber un retroceso pronto.")
+            if recommendation == "Mantener" and trend_bias == "bajista":
+                recommendation = "Considerar cerrar o mover SL"
+        elif rsi_value < 30:
+            reasons.append(f"RSI 1h en {rsi_value} (sobreventa). Posible rebote cercano.")
+            if recommendation == "Mantener" and trend_bias == "alcista":
+                recommendation = "Mantener (posible rebote)"
+
+    # Evaluar presión
+    if pressure:
+        if pressure > 1.2:
+            reasons.append(f"Presión compradora alta ({pressure:.2f}). Soporta movimiento alcista.")
+        elif pressure < 0.8:
+            reasons.append(f"Presión vendedora alta ({pressure:.2f}). Posible presión bajista.")
+
+    # Construir mensaje
+    result = (
+        f"🧮 **Evaluación de operación {symbol}**\n\n"
+        f"📌 Entrada: ${entry:.4f}\n"
+        f"📊 Precio actual: ${current_price:.4f}\n"
+    )
+    if sl:
+        result += f"🛑 SL: ${sl:.4f} (distancia: ${dist_to_sl:.4f})\n"
+    if tp:
+        result += f"🎯 TP: ${tp:.4f} (distancia: ${dist_to_tp:.4f})\n"
+    result += f"\n📈 Tendencia 1h: {trend_bias}\n"
+    if rsi_value:
+        result += f"📉 RSI 1h: {rsi_value}\n"
+    if pressure:
+        result += f"📊 Presión compradora: {pressure:.2f}\n"
+    if reasons:
+        result += "\n🔍 **Análisis**:\n" + "\n".join(f"- {r}" for r in reasons)
+    result += f"\n\n⚡ **Recomendación final**: **{recommendation}**"
+    if recommendation != "Mantener":
+        result += f"\n   ➡️ {action}"
+
+    return result
+
+
 def handle_client(conn, addr):
     try:
         raw_len = recv_exactly(conn, 4)
@@ -517,7 +637,21 @@ def handle_client(conn, addr):
 
         history = load_recent_history(HISTORY_LIMIT)
 
-        if user_input.startswith("__NEWS__"):
+        # --- NUEVO: Detectar "Evaluar operación" en lenguaje natural ---
+        if re.search(r'evaluar\s+operaci[oó]n', user_input, re.IGNORECASE):
+            response = evaluate_active_operation(user_input)
+            # Guardar en historial
+            save_message("user", user_input)
+            save_message("assistant", response)
+            # Enviar también como alerta persistente
+            try:
+                with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                    f.write(f"PERSIST:🧮 {response}")
+            except:
+                pass
+            print(f"Respuesta (evaluar op): {response[:100]}...")
+
+        elif user_input.startswith("__NEWS__"):
             coins_df = fetch_live_prices_for_news(limit=11)
             news_prompt = build_news_prompt(coins_df)
             response = direct_ollama_query(SYSTEM_PROMPT_NEWS, news_prompt, model=OLLAMA_TRADING_MODEL)
@@ -592,7 +726,6 @@ def handle_client(conn, addr):
                     if "error" in res:
                         resultados.append(f"❌ {sym}: {res['error']}")
                     else:
-                        # Mostrar directamente el texto con la recomendación LONG/SHORT
                         resultados.append(res["results_text"])
                     time.sleep(0.3)
                 response = "📈 **Análisis Avanzado de todas las criptos**\n\n" + "\n\n".join(resultados)
@@ -601,7 +734,7 @@ def handle_client(conn, addr):
                 if "error" in res:
                     response = f"❌ {res['error']}"
                 else:
-                    response = res["results_text"]  # Ya incluye recomendación LONG/SHORT
+                    response = res["results_text"]
             save_message("user", f"📈 Análisis Avanzado {symbol}")
             save_message("assistant", response)
             print(f"Respuesta (avanzado): {response[:100]}...")
