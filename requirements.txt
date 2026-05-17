@@ -11,3 +11,4 @@ python-dotenv>=1.0
 matplotlib
 requests
 py-trello>=0.15.0
+statsmodels

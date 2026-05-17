@@ -20,11 +20,8 @@ from config import (
 from tools.trading import SELECTED_CRYPTO
 
 
-class PersistentToast(QWidget):
-    """Notificación emergente persistente: se cierra al hacer clic en ella."""
-    closed = pyqtSignal()
-
-    def __init__(self, message, parent=None):
+class ToastNotification(QWidget):
+    def __init__(self, message, persistent=False, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.FramelessWindowHint |
@@ -52,76 +49,34 @@ class PersistentToast(QWidget):
         screen = QApplication.primaryScreen().availableGeometry()
         self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 20)
 
+        self.persistent = persistent
         self.animation = QPropertyAnimation(self, b"windowOpacity")
         self.animation.setDuration(300)
         self.animation.setStartValue(0.0)
         self.animation.setEndValue(0.9)
+        self.animation.finished.connect(self.after_show)
+        self.animation.start()
+
+    def after_show(self):
+        if not self.persistent:
+            QTimer.singleShot(5000, self.fade_out)
+
+    def fade_out(self):
+        self.animation = QPropertyAnimation(self, b"windowOpacity")
+        self.animation.setDuration(500)
+        self.animation.setStartValue(0.9)
+        self.animation.setEndValue(0.0)
+        self.animation.finished.connect(self.close)
         self.animation.start()
 
     def mousePressEvent(self, event):
-        """Cierra la notificación al hacer clic."""
-        self.fade_out()
-
-    def fade_out(self):
-        self.animation = QPropertyAnimation(self, b"windowOpacity")
-        self.animation.setDuration(500)
-        self.animation.setStartValue(0.9)
-        self.animation.setEndValue(0.0)
-        self.animation.finished.connect(self.close)
-        self.animation.start()
-
-
-class ToastNotification(QWidget):
-    """Notificación emergente normal que desaparece sola a los 5 segundos."""
-    def __init__(self, message, parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(
-            Qt.FramelessWindowHint |
-            Qt.WindowStaysOnTopHint |
-            Qt.Tool |
-            Qt.SubWindow
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-
-        label = QLabel(message)
-        label.setStyleSheet("""
-            background-color: #333;
-            color: white;
-            padding: 12px;
-            border-radius: 10px;
-            font-size: 14px;
-        """)
-        label.setWordWrap(True)
-        layout = QVBoxLayout()
-        layout.addWidget(label)
-        self.setLayout(layout)
-
-        self.adjustSize()
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 20, screen.bottom() - self.height() - 20)
-
-        self.animation = QPropertyAnimation(self, b"windowOpacity")
-        self.animation.setDuration(300)
-        self.animation.setStartValue(0.0)
-        self.animation.setEndValue(0.9)
-        self.animation.finished.connect(self.start_timer)
-        self.animation.start()
-
-    def start_timer(self):
-        QTimer.singleShot(5000, self.fade_out)
-
-    def fade_out(self):
-        self.animation = QPropertyAnimation(self, b"windowOpacity")
-        self.animation.setDuration(500)
-        self.animation.setStartValue(0.9)
-        self.animation.setEndValue(0.0)
-        self.animation.finished.connect(self.close)
-        self.animation.start()
+        if self.persistent:
+            self.fade_out()
+        else:
+            super().mousePressEvent(event)
 
 
 class ExhaleParticle:
-    """Partícula de humo exhalado."""
     def __init__(self, x, y):
         self.x = x
         self.y = y
@@ -402,29 +357,20 @@ class FloatingAvatar(QWidget):
         return edges if edges else None
 
     # ------------------------------------------------------------
-    # Alertas (ahora distingue entre persistentes y normales)
+    # Toast de alertas
     # ------------------------------------------------------------
     def check_auto_alerts(self):
         try:
             if os.path.exists(ALERT_FILE):
                 with open(ALERT_FILE, "r", encoding="utf-8") as f:
-                    raw = f.read().strip()
-                if raw and raw != self.last_alert_msg:
-                    self.last_alert_msg = raw
-                    try:
-                        data = json.loads(raw)
-                        messages = data.get("messages", [])
-                        persistent = data.get("persistent", False)
-                    except:
-                        messages = [raw]
-                        persistent = False
-
-                    for msg in messages:
-                        if persistent:
-                            toast = PersistentToast(f"🔔 {msg}")
-                        else:
-                            toast = ToastNotification(f"🔔 {msg}")
-                        toast.show()
+                    msg = f.read().strip()
+                if msg and msg != self.last_alert_msg:
+                    self.last_alert_msg = msg
+                    persistent = msg.startswith("PERSIST:")
+                    if persistent:
+                        msg = msg[len("PERSIST:"):]
+                    toast = ToastNotification(f"🔔 {msg}", persistent=persistent)
+                    toast.show()
                     os.remove(ALERT_FILE)
         except Exception:
             pass
@@ -735,7 +681,7 @@ class FloatingAvatar(QWidget):
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual
+    # Menú contextual (con submenú Avanzado)
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -747,6 +693,15 @@ class FloatingAvatar(QWidget):
         crypto_menu.addSeparator()
         crypto_menu.addAction("📊 Todas las criptos").triggered.connect(lambda: self.show_crypto_analysis("ALL"))
         menu.addMenu(crypto_menu)
+
+        # Submenú Análisis Avanzado
+        advanced_menu = QMenu("📈 Avanzado", self)
+        for sym in SELECTED_CRYPTO:
+            name = sym.replace("USDT", "")
+            advanced_menu.addAction(f"📊 {name}").triggered.connect(lambda checked, s=sym: self.show_advanced_analysis(s))
+        advanced_menu.addSeparator()
+        advanced_menu.addAction("📊 Todas las criptos").triggered.connect(lambda: self.show_advanced_analysis("ALL"))
+        menu.addMenu(advanced_menu)
 
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
 
@@ -782,6 +737,8 @@ class FloatingAvatar(QWidget):
 
     def show_crypto_analysis(self, symbol):
         self.start_query(f"__CRYPTO__:{symbol}")
+    def show_advanced_analysis(self, symbol):
+        self.start_query(f"__ADVANCED__:{symbol}")
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
     def show_sports_analysis(self, category=None):

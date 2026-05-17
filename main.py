@@ -38,10 +38,11 @@ from tools.alerts import start_alert_monitor
 from tools.business import (
     generate_weekly_report, list_goals,
     save_binance_config, get_binance_config,
-    add_earn_product, get_earn_expiring_soon
+    add_earn_product
 )
 from tools.binance_manager import generate_business_suggestions, generate_business_summary
 from tools.trello import create_card, move_card, add_comment
+from tools.advanced_analysis import perform_advanced_analysis
 import ollama
 
 ollama_client = ollama.Client(host=OLLAMA_HOST, timeout=OLLAMA_TIMEOUT)
@@ -87,6 +88,12 @@ SYSTEM_PROMPT_BINANCE_MANAGER = (
     "Eres un gestor profesional de criptomonedas en Binance. Tu cliente tiene un pequeño capital "
     "y quiere maximizar sus ganancias. Analiza los datos del mercado y la configuración de su negocio "
     "para dar una recomendación clara y breve. Responde solo con texto, sin herramientas."
+)
+
+SYSTEM_PROMPT_ADVANCED = (
+    "Eres un analista cuantitativo de criptomonedas. Recibes métricas avanzadas (Hurst, ARIMA, Monte Carlo, "
+    "Eficiencia de Kaufman, volatilidad adaptativa) y una recomendación de dirección (LONG/SHORT) con precios. "
+    "Debes interpretarlas y justificar brevemente la recomendación. Responde solo con texto, sin herramientas."
 )
 
 # ----- Caché deportivo -----
@@ -493,7 +500,6 @@ def _auto_binance_suggestions_loop():
             prompt = generate_business_suggestions()
             if prompt:
                 response = direct_ollama_query(SYSTEM_PROMPT_BINANCE_MANAGER, prompt, model=OLLAMA_MODEL)
-                # Escribir alerta persistente (PERSIST:)
                 msg = f"PERSIST:💼 Gestor Binance: {response}"
                 with open(ALERT_FILE, "w", encoding="utf-8") as f:
                     f.write(msg)
@@ -575,6 +581,30 @@ def handle_client(conn, addr):
             save_message("user", "₿ Análisis cripto")
             save_message("assistant", response)
             print(f"Respuesta (cripto): {response[:100]}...")
+
+        elif user_input.startswith("__ADVANCED__"):
+            parts = user_input.split(":", 1)
+            symbol = parts[1].strip() if len(parts) > 1 else "BTCUSDT"
+            if symbol == "ALL":
+                resultados = []
+                for sym in SELECTED_CRYPTO:
+                    res = perform_advanced_analysis(sym)
+                    if "error" in res:
+                        resultados.append(f"❌ {sym}: {res['error']}")
+                    else:
+                        # Mostrar directamente el texto con la recomendación LONG/SHORT
+                        resultados.append(res["results_text"])
+                    time.sleep(0.3)
+                response = "📈 **Análisis Avanzado de todas las criptos**\n\n" + "\n\n".join(resultados)
+            else:
+                res = perform_advanced_analysis(symbol)
+                if "error" in res:
+                    response = f"❌ {res['error']}"
+                else:
+                    response = res["results_text"]  # Ya incluye recomendación LONG/SHORT
+            save_message("user", f"📈 Análisis Avanzado {symbol}")
+            save_message("assistant", response)
+            print(f"Respuesta (avanzado): {response[:100]}...")
 
         elif user_input.startswith("__SPORTS__"):
             parts = user_input.split(":", 1)

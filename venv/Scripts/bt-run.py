@@ -1,4 +1,4 @@
-#!C:\Users\danieaccs1\Desktop\Daniel\asistente_virtual\venv\Scripts\python.exe
+#!C:\Users\danieaccs1\Desktop\Daniel\Asiste-Virtual-Personal\venv\Scripts\python.exe
 # -*- coding: utf-8; py-indent-offset:4 -*-
 ###############################################################################
 #
