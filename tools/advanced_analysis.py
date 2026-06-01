@@ -1,10 +1,11 @@
 # tools/advanced_analysis.py
 import numpy as np
 import pandas as pd
-from tools.trading import _get_klines, calculate_atr
+import requests
+import time
+from tools.trading import _get_klines, calculate_atr, STABLECOINS
 
 def _hurst(ts: pd.Series) -> float:
-    """Calcula el exponente de Hurst usando R/S analysis."""
     ts = ts.dropna().values
     if len(ts) < 30:
         return 0.5
@@ -33,23 +34,26 @@ def _hurst(ts: pd.Series) -> float:
     coeffs = np.polyfit(x, y, 1)
     return coeffs[0]
 
-def _arima_forecast(ts: pd.Series, horizon: int = 1) -> float | None:
-    """ARIMA(1,1,1) simple usando statsmodels. Si falla, devuelve None."""
+def _arima_forecast(ts: pd.Series, horizon: int = 1) -> tuple[float | None, str | None]:
     try:
         from statsmodels.tsa.arima.model import ARIMA
-        model = ARIMA(ts.dropna(), order=(1,1,1))
+    except ImportError:
+        return None, "statsmodels no está instalado. Ejecuta 'pip install statsmodels'"
+    ts_clean = ts.dropna()
+    if len(ts_clean) < 30:
+        return None, f"Datos insuficientes para ARIMA (solo {len(ts_clean)} puntos, se necesitan al menos 30)"
+    try:
+        model = ARIMA(ts_clean, order=(1,1,1))
         fit = model.fit(method_kwargs={'maxiter': 100}, disp=False)
         forecast = fit.forecast(steps=horizon)
-        return forecast.iloc[-1]
-    except ImportError:
-        print("ARIMA no disponible: statsmodels no está instalado.")
-        return None
+        return forecast.iloc[-1], None
     except Exception as e:
-        print(f"ARIMA falló: {e}")
-        return None
+        error_msg = str(e)
+        if "convergence" in error_msg.lower() or "singular" in error_msg.lower():
+            return None, "ARIMA no pudo converger con estos datos (quizás la serie es muy corta o plana)"
+        return None, f"Error ajustando ARIMA: {error_msg[:100]}"
 
 def _monte_carlo_simulation(close: pd.Series, days: int = 1, simulations: int = 1000) -> dict:
-    """Simulación Monte Carlo con GBM. Retorna prob. de subida y percentiles."""
     log_returns = np.log(close / close.shift(1)).dropna()
     mu = log_returns.mean()
     sigma = log_returns.std()
@@ -73,18 +77,15 @@ def _monte_carlo_simulation(close: pd.Series, days: int = 1, simulations: int = 
     }
 
 def _kaufman_efficiency_ratio(close: pd.Series, period: int = 10) -> pd.Series:
-    """Ratio de eficiencia de Kaufman."""
     change = close.diff(period).abs()
     volatility = close.diff().abs().rolling(window=period).sum()
     er = change / volatility
     return er
 
 def _adaptive_volatility(close: pd.Series, period: int = 20) -> pd.Series:
-    """Volatilidad adaptativa (desviación estándar rodante anualizada)."""
     return close.pct_change().rolling(window=period).std() * np.sqrt(365)
 
 def perform_advanced_analysis(symbol: str) -> dict:
-    """Realiza análisis avanzado para un símbolo y retorna resultados y prompt."""
     INTERVAL = "1d"
     LIMIT = 200
     df = _get_klines(symbol, INTERVAL, LIMIT)
@@ -94,49 +95,33 @@ def perform_advanced_analysis(symbol: str) -> dict:
     close = df['Close'].copy()
     last_price = close.iloc[-1]
 
-    # 1. Exponente de Hurst
     hurst_val = _hurst(close)
-
-    # 2. ARIMA
-    arima_pred = _arima_forecast(close)
-    arima_available = arima_pred is not None
-
-    # 3. Monte Carlo
+    arima_pred, arima_error = _arima_forecast(close)
     mc = _monte_carlo_simulation(close, days=1, simulations=1000)
-
-    # 4. Kaufman Efficiency Ratio
     er = _kaufman_efficiency_ratio(close, period=10).iloc[-1]
     fast_ema = close.ewm(span=2, adjust=False).mean()
     slow_ema = close.ewm(span=30, adjust=False).mean()
     ama = (er * fast_ema + (1 - er) * slow_ema).iloc[-1] if not pd.isna(er) else close.iloc[-1]
-
-    # 5. Volatilidad adaptativa
     vol = _adaptive_volatility(close, 20).iloc[-1]
 
-    # Calcular ATR (14) para referencia
     atr_series = calculate_atr(df, period=14)
     current_atr = atr_series.iloc[-1] if not atr_series.empty and not pd.isna(atr_series.iloc[-1]) else last_price * 0.02
 
-    # Determinar dirección combinando señales (sin cambios)
     bullish_signals = 0
     bearish_signals = 0
-
     if last_price > ama:
         bullish_signals += 1 if hurst_val > 0.5 else 0
     else:
         bearish_signals += 1 if hurst_val > 0.5 else 0
-
     if arima_pred:
         if arima_pred > last_price:
             bullish_signals += 1
         else:
             bearish_signals += 1
-
     if mc["prob_up"] > 0.5:
         bullish_signals += 1
     else:
         bearish_signals += 1
-
     if not pd.isna(er) and er > 0.6:
         if last_price > ama:
             bullish_signals += 1
@@ -144,17 +129,14 @@ def perform_advanced_analysis(symbol: str) -> dict:
             bearish_signals += 1
 
     direction = "LONG" if bullish_signals >= bearish_signals else "SHORT"
-
-    # --- NUEVO: TP y SL basados en porcentajes fijos ---
     entry_price = last_price
     if direction == "LONG":
-        target_price = round(entry_price * 1.05, 2)   # +5%
-        stop_loss = round(entry_price * 0.98, 2)      # -2%
+        target_price = round(entry_price * 1.05, 2)
+        stop_loss = round(entry_price * 0.98, 2)
     else:
-        target_price = round(entry_price * 0.95, 2)   # -5%
-        stop_loss = round(entry_price * 1.02, 2)      # +2%
+        target_price = round(entry_price * 0.95, 2)
+        stop_loss = round(entry_price * 1.02, 2)
 
-    # Construir resultados para mostrar
     trend = "alcista persistente" if hurst_val > 0.5 else "reversión a la media" if hurst_val < 0.5 else "aleatorio"
     mc_text = f"Prob. suba: {mc['prob_up']*100:.1f}% (rango 5-95%: {mc['p5']} - {mc['p95']})"
 
@@ -163,10 +145,10 @@ def perform_advanced_analysis(symbol: str) -> dict:
         f"Precio actual: ${entry_price:.2f}\n"
         f"Exponente de Hurst: {hurst_val:.3f} → mercado {trend}\n"
     )
-    if arima_available:
-        results_text += f"Predicción ARIMA 1d: ${arima_pred:.2f}\n"
+    if arima_error:
+        results_text += f"Predicción ARIMA: {arima_error}\n"
     else:
-        results_text += "Predicción ARIMA no disponible (instala statsmodels o revisa los datos).\n"
+        results_text += f"Predicción ARIMA 1d: ${arima_pred:.2f}\n"
     results_text += f"Simulación Monte Carlo (1d): {mc_text}\n"
     if not pd.isna(er):
         results_text += f"Eficiencia de Kaufman (ER): {er:.3f} (cercano a 1 = tendencia fuerte)\n"
@@ -181,8 +163,78 @@ def perform_advanced_analysis(symbol: str) -> dict:
         f"   Stop‑Loss (2%): ${stop_loss:.2f}\n"
         f"   (Referencia ATR 14: ${current_atr:.2f})\n"
     )
+    # Ahora incluimos el símbolo en el diccionario de retorno
+    return {
+        "symbol": symbol,                     # ← nuevo
+        "results_text": results_text,
+        "direction": direction,
+        "prob_up": mc["prob_up"],
+        "entry_price": entry_price,
+        "target_price": target_price,
+        "stop_loss": stop_loss,
+    }
 
-    prompt_for_llm = results_text + (
-        "\nInterpreta estos resultados y justifica la recomendación en 2 líneas."
-    )
-    return {"results_text": results_text, "prompt_for_llm": prompt_for_llm}
+
+def _get_all_spot_symbols_under(price_limit: float = 5.0, limit: int = 30) -> list[str]:
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Error obteniendo tickers para joyas ocultas: {e}")
+        return []
+
+    candidates = []
+    for t in data:
+        sym = t["symbol"]
+        if not sym.endswith("USDT"):
+            continue
+        base = sym[:-4]
+        if base.upper() in STABLECOINS:
+            continue
+        last_price = float(t["lastPrice"])
+        volume = float(t.get("quoteVolume", 0) or 0)
+        if last_price < price_limit and volume > 0:
+            candidates.append((sym, volume))
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return [sym for sym, _ in candidates[:limit]]
+
+
+def find_hidden_gems() -> str:
+    symbols = _get_all_spot_symbols_under(5.0, limit=30)
+    if not symbols:
+        return "No se pudieron obtener monedas de bajo precio en este momento."
+
+    print(f"[HIDDEN GEMS] Analizando {len(symbols)} monedas...")
+    long_candidates = []
+    for sym in symbols:
+        try:
+            res = perform_advanced_analysis(sym)
+            if "error" in res:
+                continue
+            if res["direction"] == "LONG":
+                long_candidates.append(res)
+        except Exception as e:
+            print(f"[HIDDEN GEMS] Error con {sym}: {e}")
+        time.sleep(0.2)
+
+    if not long_candidates:
+        return "Ninguna de las monedas analizadas mostró una señal clara de LONG en este momento."
+
+    long_candidates.sort(key=lambda x: x["prob_up"], reverse=True)
+    top3 = long_candidates[:3]
+
+    result = "💎 **Joyas Ocultas para invertir con poco capital**\n\n"
+    for i, gem in enumerate(top3, 1):
+        # Ahora sí mostramos el símbolo (ej. 1000SATSUSDT) y lo acortamos para mejor lectura
+        symbol_display = gem['symbol'].replace("USDT", "")  # quita el USDT final si quieres
+        result += (
+            f"🔹 **#{i}  {symbol_display}**\n"
+            f"   Entrada: ${gem['entry_price']:.4f}\n"
+            f"   Prob. subida (MC): {gem['prob_up']*100:.1f}%\n"
+            f"   TP (5%): ${gem['target_price']:.4f}\n"
+            f"   SL (2%): ${gem['stop_loss']:.4f}\n\n"
+        )
+    result += "⚠️ Estas recomendaciones se basan en análisis estadístico avanzado. Opera con responsabilidad."
+    return result

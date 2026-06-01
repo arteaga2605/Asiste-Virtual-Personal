@@ -8,7 +8,7 @@ import time
 import unicodedata
 import os
 import re
-import pandas as pd  # ← IMPORTANTE: necesario para pd.isna()
+import pandas as pd
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from config import (
@@ -45,7 +45,8 @@ from tools.business import (
 )
 from tools.binance_manager import generate_business_suggestions, generate_business_summary
 from tools.trello import create_card, move_card, add_comment
-from tools.advanced_analysis import perform_advanced_analysis
+from tools.advanced_analysis import perform_advanced_analysis, find_hidden_gems
+from tools.tracker import start_tracking, stop_tracking
 import ollama
 
 ollama_client = ollama.Client(host=OLLAMA_HOST, timeout=OLLAMA_TIMEOUT)
@@ -511,7 +512,7 @@ def _auto_binance_suggestions_loop():
         time.sleep(BINANCE_MANAGER_INTERVAL)
 
 
-# --------------- EVALUAR OPERACIÓN ACTIVA ---------------
+# --------------- EVALUAR OPERACIÓN ACTIVA (exportable) ---------------
 def evaluate_active_operation(user_input: str) -> str:
     symbol_match = re.search(r'(?:de\s+)?([A-Za-z]{2,10}USDT)', user_input, re.IGNORECASE)
     entry_match = re.search(r'(?:entrada|precio\s*(?:entrada|de\s*entrada))\s*(?:es\s*)?(\d+\.?\d*)', user_input, re.IGNORECASE)
@@ -620,7 +621,30 @@ def handle_client(conn, addr):
 
         history = load_recent_history(HISTORY_LIMIT)
 
-        if re.search(r'evaluar\s+operaci[oó]n', user_input, re.IGNORECASE):
+        # --- Joyas ocultas (HIDDEN_GEMS) ---
+        if user_input.startswith("__HIDDEN_GEMS__"):
+            response = find_hidden_gems()
+            save_message("user", "💎 Joyas Ocultas")
+            save_message("assistant", response)
+            print(f"Respuesta (joyas ocultas): {response[:100]}...")
+
+        elif user_input.startswith("__TRACK__:"):
+            operation_text = user_input[len("__TRACK__:"):].strip()
+            if not operation_text:
+                response = "No se ha proporcionado texto de operación para seguir."
+            else:
+                msg = start_tracking(operation_text)
+                response = evaluate_active_operation(operation_text)
+                save_message("user", operation_text)
+                save_message("assistant", response)
+                try:
+                    with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                        f.write(f"PERSIST:🔄 Seguimiento iniciado: {response}")
+                except:
+                    pass
+                print(f"Respuesta (track): {response[:100]}...")
+
+        elif re.search(r'evaluar\s+operaci[oó]n', user_input, re.IGNORECASE):
             response = evaluate_active_operation(user_input)
             save_message("user", user_input)
             save_message("assistant", response)

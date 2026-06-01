@@ -4,14 +4,17 @@ import json
 import unicodedata
 import time
 from datetime import datetime, timezone
+from tools.mlb_stats import (
+    get_probable_pitchers, get_pitcher_recent_stats,
+    get_batter_vs_pitcher, get_team_streak,
+    get_team_id_by_name, get_top_batters
+)
 
 SPORTS_CONFIG = [
-    # Grandes ligas de EE.UU.
     {"sport": "basketball", "league": "nba",     "name": "NBA",      "category": "basketball"},
     {"sport": "football",   "league": "nfl",     "name": "NFL",      "category": "football"},
     {"sport": "baseball",   "league": "mlb",     "name": "MLB",      "category": "baseball"},
     {"sport": "hockey",     "league": "nhl",     "name": "NHL",      "category": "hockey"},
-    # Fútbol masculino europeo
     {"sport": "soccer",     "league": "eng.1",   "name": "Premier League",       "category": "soccer"},
     {"sport": "soccer",     "league": "esp.1",   "name": "La Liga",              "category": "soccer"},
     {"sport": "soccer",     "league": "ger.1",   "name": "Bundesliga",           "category": "soccer"},
@@ -19,12 +22,9 @@ SPORTS_CONFIG = [
     {"sport": "soccer",     "league": "fra.1",   "name": "Ligue 1",              "category": "soccer"},
     {"sport": "soccer",     "league": "ned.1",   "name": "Eredivisie",           "category": "soccer"},
     {"sport": "soccer",     "league": "sco.1",   "name": "Scottish Premiership", "category": "soccer"},
-    # Fútbol americano e internacional
     {"sport": "soccer",     "league": "usa.1",   "name": "MLS",                  "category": "soccer"},
     {"sport": "soccer",     "league": "mex.1",   "name": "Liga MX",              "category": "soccer"},
-    # Fútbol de otras regiones
     {"sport": "soccer",     "league": "ksa.1",   "name": "Saudi Pro League",     "category": "soccer"},
-    # Fútbol femenino
     {"sport": "soccer",     "league": "esp.w.1", "name": "Spanish Liga F",       "category": "soccer"},
     {"sport": "soccer",     "league": "aus.w.1", "name": "A-League Women",       "category": "soccer"},
 ]
@@ -108,10 +108,6 @@ def _is_today(event_date_utc):
         return False
 
 def _get_detailed_stats(sport: str, league: str, event_id: str) -> dict:
-    """
-    Obtiene estadísticas avanzadas desde el resumen de ESPN.
-    Incluye tiros, posesión, eficiencia, etc. si están disponibles.
-    """
     url = SUMMARY_URL.format(sport=sport, league=league, event_id=event_id)
     try:
         resp = requests.get(url, timeout=10)
@@ -120,20 +116,9 @@ def _get_detailed_stats(sport: str, league: str, event_id: str) -> dict:
     except Exception as e:
         print(f"Error obteniendo summary para {event_id}: {e}")
         return {}
-
-    # Extraer estadísticas de equipos desde el boxscore
-    stats_dict = {}
-    # Buscar en diferentes ubicaciones posibles del JSON
     boxscore = data.get("boxscore", {})
     teams_stats = boxscore.get("teams", [])
-    if not teams_stats:
-        # Alternativa: 'competitions' > 'boxscore' > 'teams'
-        for comp in data.get("competitions", []):
-            bx = comp.get("boxscore", {})
-            teams_stats = bx.get("teams", [])
-            if teams_stats:
-                break
-
+    stats_dict = {}
     for team in teams_stats:
         team_name = team.get("team", {}).get("displayName", "Desconocido")
         statistics_list = team.get("statistics", [])
@@ -144,7 +129,6 @@ def _get_detailed_stats(sport: str, league: str, event_id: str) -> dict:
             if display_val and display_val != "":
                 stats_summary[name] = display_val
         stats_dict[team_name] = stats_summary
-
     return stats_dict
 
 def enrich_games_with_stats(games: list) -> list:
@@ -158,6 +142,70 @@ def enrich_games_with_stats(games: list) -> list:
         else:
             game["detailed_stats"] = {}
     return games
+
+def _enrich_mlb_pitchers(game: dict):
+    """Para un partido de MLB, obtiene pitchers, rachas y enfrentamientos."""
+    if game.get("sport") != "baseball" or game.get("league_slug") != "mlb":
+        return
+    event_id = game.get("event_id")
+    if not event_id:
+        return
+
+    # Pitchers probables
+    pitchers = get_probable_pitchers(event_id)
+    game["probable_pitchers"] = pitchers
+
+    # Estadísticas recientes de cada pitcher
+    pitcher_stats = []
+    for p in pitchers:
+        pid = p.get("id")
+        if pid:
+            stats = get_pitcher_recent_stats(pid)
+            if stats:
+                pitcher_stats.append({**p, "recent": stats})
+        time.sleep(0.1)
+    game["pitcher_stats"] = pitcher_stats
+
+    # Rachas de equipos
+    team_streaks = {}
+    for team in game.get("teams", []):
+        team_name = team.get("name")
+        if team_name:
+            tid = get_team_id_by_name(team_name)
+            if tid:
+                streak = get_team_streak(tid)
+                if streak:
+                    team_streaks[team_name] = streak
+            time.sleep(0.1)
+    game["team_streaks"] = team_streaks
+
+    # Enfrentamientos bateador-pitcher (top 3 bateadores de cada equipo contra el pitcher rival)
+    batter_vs_pitcher = []
+    # Solo si tenemos al menos un pitcher con ID
+    for p in pitcher_stats:
+        pitcher_id = p.get("id")
+        pitcher_name = p.get("name")
+        # Para cada equipo, obtener top 3 bateadores
+        for team in game.get("teams", []):
+            team_name = team.get("name")
+            # Evitar consultar al pitcher de su propio equipo
+            if team_name == p.get("team"):
+                continue
+            top_batters = get_top_batters(team_name, limit=3)
+            for batter in top_batters:
+                bvp = get_batter_vs_pitcher(batter["id"], pitcher_id)
+                if bvp and bvp.get("atBats", 0) > 0:
+                    batter_vs_pitcher.append({
+                        "batter": batter["name"],
+                        "pitcher": pitcher_name,
+                        "avg": bvp.get("avg"),
+                        "hits": bvp.get("hits", 0),
+                        "atBats": bvp.get("atBats", 0),
+                        "homeRuns": bvp.get("homeRuns", 0),
+                        "strikeOuts": bvp.get("strikeOuts", 0)
+                    })
+                time.sleep(0.1)
+    game["batter_vs_pitcher"] = batter_vs_pitcher
 
 def fetch_sports_data(category_filter: str = None) -> tuple[list, dict]:
     all_games = []
@@ -205,6 +253,11 @@ def fetch_sports_data(category_filter: str = None) -> tuple[list, dict]:
                     "sport": config["sport"],
                     "league_slug": config["league"],
                 }
+    # Enriquecer partidos MLB con datos de pitchers, rachas y enfrentamientos
+    for game in all_games:
+        if game.get("sport") == "baseball" and game.get("league_slug") == "mlb":
+            _enrich_mlb_pitchers(game)
+
     today_games = [g for g in all_games if g["is_today"]]
     future_games = sorted([g for g in all_games if not g["is_today"]], key=lambda g: g["start_time"])
     selected = today_games + future_games
@@ -260,6 +313,31 @@ def build_sports_prompt(games_data: list) -> str:
                 if stats:
                     stat_str = ", ".join([f"{k}: {v}" for k, v in stats.items()])
                     prompt += f"  {team_name}: {stat_str}\n"
+        # Sección MLB
+        if game.get("sport") == "baseball" and game.get("league_slug") == "mlb":
+            pitchers = game.get("pitcher_stats", [])
+            if pitchers:
+                prompt += "**Lanzadores probables y su forma reciente (últimas 5 salidas):**\n"
+                for p in pitchers:
+                    recent = p.get("recent", {})
+                    if recent:
+                        prompt += f"  - {p['name']} ({p.get('team', '')}): {recent.get('wins',0)}-{recent.get('losses',0)}, ERA {recent.get('era','N/D')}, {recent.get('innings','N/D')} IP\n"
+                    else:
+                        prompt += f"  - {p['name']} ({p.get('team', '')}): sin datos recientes\n"
+                prompt += "\n"
+            batter_vs = game.get("batter_vs_pitcher", [])
+            if batter_vs:
+                prompt += "**Enfrentamientos bateador-pitcher destacados:**\n"
+                for bvp in batter_vs:
+                    avg_str = f"{float(bvp['avg']):.3f}" if bvp.get('avg') is not None else "N/D"
+                    prompt += f"  - {bvp['batter']} vs {bvp['pitcher']}: AVG {avg_str}, {bvp.get('hits',0)} H, {bvp.get('homeRuns',0)} HR, {bvp.get('strikeOuts',0)} K en {bvp.get('atBats',0)} VB\n"
+                prompt += "\n"
+            streaks = game.get("team_streaks", {})
+            if streaks:
+                prompt += "**Rachas recientes de equipos:**\n"
+                for team_name, streak in streaks.items():
+                    prompt += f"  - {team_name}: {streak}\n"
+                prompt += "\n"
         prompt += "\n"
     prompt += "Genera ahora el JSON con las predicciones (un elemento por partido, con confianza)."
     return prompt

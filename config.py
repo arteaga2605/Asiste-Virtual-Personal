@@ -11,7 +11,7 @@ OLLAMA_TRADING_MODEL = os.getenv("OLLAMA_TRADING_MODEL", "deepseek-r1:8b")
 OLLAMA_SPORTS_MODEL = os.getenv("OLLAMA_SPORTS_MODEL", "qwen3:8b")
 OLLAMA_FAST_MODEL = os.getenv("OLLAMA_FAST_MODEL", "phi3:mini")
 OLLAMA_CODE_MODEL = os.getenv("OLLAMA_CODE_MODEL", "codellama:latest")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "600"))          # Aumentado a 10 min
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "600"))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -54,3 +54,9 @@ SPORTS_EVALUATION_HOURS = int(os.getenv("SPORTS_EVALUATION_HOURS", "12"))
 
 # --------------- Gestor Binance ---------------
 BINANCE_MANAGER_INTERVAL = int(os.getenv("BINANCE_MANAGER_INTERVAL", str(2 * 60 * 60)))
+
+# --------------- Seguimiento de operaciones ---------------
+TRACKER_INTERVAL_MINUTES = int(os.getenv("TRACKER_INTERVAL_MINUTES", "30"))
+
+# --------------- MLB Stats API ---------------
+MLB_STATS_API_BASE = "https://statsapi.mlb.com/api/v1"

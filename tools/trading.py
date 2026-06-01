@@ -9,6 +9,14 @@ import requests
 from config import DATA_DIR, BINANCE_WS_URL
 
 # ------------------------------------------------------------
+# Lista de stablecoins conocidas (excluidas de análisis)
+# ------------------------------------------------------------
+STABLECOINS = {
+    "USDC", "BUSD", "TUSD", "USDP", "USDD", "DAI", "FRAX", "LUSD", "USDJ",
+    "USTC", "USDS", "FDUSD", "UST", "PAX", "GUSD", "USDX", "CUSD"
+}
+
+# ------------------------------------------------------------
 # Funciones ya existentes (sin cambios)
 # ------------------------------------------------------------
 def load_historical_data(symbol: str) -> pd.DataFrame:
@@ -152,7 +160,7 @@ def is_binance_stream_active() -> bool:
     return _stream_active
 
 # ------------------------------------------------------------
-# LISTA FIJA DE CRIPTOMONEDAS (ahora con DASH)
+# LISTA FIJA DE CRIPTOMONEDAS
 # ------------------------------------------------------------
 SELECTED_CRYPTO = [
     "BTCUSDT", "XRPUSDT", "BNBUSDT", "SOLUSDT",

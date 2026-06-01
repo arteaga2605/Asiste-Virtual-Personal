@@ -681,7 +681,7 @@ class FloatingAvatar(QWidget):
         self.update_bulb_position()
 
     # ------------------------------------------------------------
-    # Menú contextual (con el nuevo botón)
+    # Menú contextual (con Joyas Ocultas)
     # ------------------------------------------------------------
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -700,6 +700,7 @@ class FloatingAvatar(QWidget):
             advanced_menu.addAction(f"📊 {name}").triggered.connect(lambda checked, s=sym: self.show_advanced_analysis(s))
         advanced_menu.addSeparator()
         advanced_menu.addAction("📊 Todas las criptos").triggered.connect(lambda: self.show_advanced_analysis("ALL"))
+        advanced_menu.addAction("💎 Joyas Ocultas").triggered.connect(self.show_hidden_gems)  # NUEVO
         menu.addMenu(advanced_menu)
 
         menu.addAction("📰 Noticias del día").triggered.connect(self.show_crypto_gems)
@@ -720,10 +721,13 @@ class FloatingAvatar(QWidget):
         trello_menu.addAction("Crear tarjeta").triggered.connect(self.show_trello_create_card)
         menu.addMenu(trello_menu)
 
+        eval_menu = QMenu("🧮 Evaluar Operación", self)
+        eval_menu.addAction("📋 Evaluar ahora").triggered.connect(self.show_evaluate_operation)
+        eval_menu.addAction("🔄 Seguimiento").triggered.connect(self.show_start_tracking)
+        menu.addMenu(eval_menu)
+
         menu.addAction("📊 Reporte").triggered.connect(self.show_report)
         menu.addSeparator()
-        # NUEVO BOTÓN
-        menu.addAction("🧮 Evaluar Operación").triggered.connect(self.show_evaluate_operation)
         menu.addAction("💼 Gestor Binance").triggered.connect(self.show_binance_manager)
         menu.addAction("💡 Ideas de ingresos").triggered.connect(self.show_income_ideas)
         menu.addSeparator()
@@ -740,6 +744,8 @@ class FloatingAvatar(QWidget):
         self.start_query(f"__CRYPTO__:{symbol}")
     def show_advanced_analysis(self, symbol):
         self.start_query(f"__ADVANCED__:{symbol}")
+    def show_hidden_gems(self):
+        self.start_query("__HIDDEN_GEMS__")
     def show_crypto_gems(self):
         self.start_query("__NEWS__")
     def show_sports_analysis(self, category=None):
@@ -760,9 +766,13 @@ class FloatingAvatar(QWidget):
     def show_binance_manager(self):
         self.start_query("__BINANCE_MANAGER__")
     def show_evaluate_operation(self):
-        # Coloca un texto de ejemplo en el campo de entrada
         self.input_field.setText("Evaluar operación: XRPUSDT, entrada 1.4233, tamaño 69.8399, SL 1.4054, TP 1.4542")
         self.input_field.setFocus()
+    def show_start_tracking(self):
+        current_text = self.input_field.text().strip()
+        if not current_text:
+            current_text = "Evaluar operación: XRPUSDT, entrada 1.4233, tamaño 69.8399, SL 1.4054, TP 1.4542"
+        self.start_query(f"__TRACK__:{current_text}")
 
     def show_trello_boards(self):
         self.start_query("__TRELLO__:list_boards")
